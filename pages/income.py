@@ -17,7 +17,7 @@ from widgets import Card, ScrollFrame, AddEntryDialog, ViewReceiptDialog, make_b
 # Income categories displayed as separate sections
 INCOME_SECTIONS = [
     ("salary",    "Salary",      "💵"),
-    ("allowance", "Allowances",  "🎁"),
+    ("allowance(not taxable)", "Allowances(not taxable)",  "🎁"),
 ]
 
 
