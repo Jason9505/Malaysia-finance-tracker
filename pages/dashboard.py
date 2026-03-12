@@ -297,12 +297,13 @@ class DashboardPage(ScrollFrame):
     def _get_balance(self):  return self.db.total_income() - self.db.total_expenses()
 
     def _get_est_tax(self):
-        income = self.db.total_income()
-        return calc_malaysia_tax(max(0.0, income - 9_000))
+        # Only salary is taxable — allowances excluded
+        salary = self.db.total_income("salary")
+        return calc_malaysia_tax(max(0.0, salary - 9_000))
 
     # ── Refresh ---------------------------------------------------------------
 
-    def refresh(self):
+    def refresh(self):  # sourcery skip: use-contextlib-suppress
         # Summary cards
         for title, (lbl, getter) in self._card_labels.items():
             try:

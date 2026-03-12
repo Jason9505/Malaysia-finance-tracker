@@ -25,7 +25,7 @@ class TaxPage(ScrollFrame):
     Income Tax Calculator page (Malaysia YA 2025).
 
     Data flow:
-      1. Salary + Allowance totals pulled from DB → Gross Income
+      1. Salary only is used as taxable gross income (allowances excluded)
       2. Tax-deductible expenses are mapped to relief keys automatically
       3. User can add extra manual relief entries with optional receipt
       4. Progressive tax computed → shows chargeable income, net tax, bracket table
@@ -73,9 +73,9 @@ class TaxPage(ScrollFrame):
 
         self._inc_labels = {}
         rows = [
-            ("Salary",             "salary",    C_TEXT,    ""),
-            ("Allowances",         "allowance", C_TEXT,    ""),
-            ("Total Gross Income", "total",     C_SUCCESS, "bold"),
+            ("Salary (Taxable)",              "salary",    C_TEXT,    "bold"),
+            ("Allowances (Not Taxable)",        "allowance", C_TEXT_MED, ""),
+            ("Gross Taxable Income",           "total",     C_SUCCESS, "bold"),
         ]
         for i, (display, key, color, weight) in enumerate(rows):
             tk.Label(grid, text=display, font=("Segoe UI", 10),
@@ -366,14 +366,16 @@ class TaxPage(ScrollFrame):
 
     # ── Refresh ───────────────────────────────────────────────────────────────
 
-    def refresh(self):
+    def refresh(self):  # sourcery skip: use-assigned-variable, use-fstring-for-concatenation
         # ── Income figures ─────────────────────────────
-        sal = self.db.total_income("salary")
-        alw = self.db.total_income("allowance")
-        gross = sal + alw
+        # Only salary is subject to income tax.
+        # Allowances are shown for reference but excluded from tax calculation.
+        sal   = self.db.total_income("salary")
+        alw   = self.db.total_income("allowance")
+        gross = sal  # taxable gross = salary only, NOT allowances
 
         self._inc_labels["salary"].config(text=fmt_rm(sal))
-        self._inc_labels["allowance"].config(text=fmt_rm(alw))
+        self._inc_labels["allowance"].config(text=fmt_rm(alw) + "  (excluded)")
         self._inc_labels["total"].config(text=fmt_rm(gross))
 
         # ── Relief computation ─────────────────────────
