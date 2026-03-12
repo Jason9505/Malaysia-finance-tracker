@@ -127,7 +127,7 @@ class App(tk.Tk):
                  bg=C_SIDEBAR, fg="white").pack(side="left")
         brand = tk.Frame(logo_frame, bg=C_SIDEBAR)
         brand.pack(side="left", padx=8)
-        tk.Label(brand, text="MyKad Tracker",
+        tk.Label(brand, text="Finance Tracker",
                  font=("Segoe UI", 11, "bold"),
                  bg=C_SIDEBAR, fg="white").pack(anchor="w")
         tk.Label(brand, text="Malaysia Edition",
