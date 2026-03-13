@@ -77,7 +77,7 @@ def make_thumb(path, size=(48, 48)):
 
 # ── Malaysia income tax calculation ──────────────────────────────────────────
 
-def calc_malaysia_tax(chargeable_income):
+def calc_malaysia_tax(chargeable_income):  # sourcery skip: assign-if-exp
     """
     Calculate Malaysia income tax for YA 2025 using progressive tax bands.
     Bands and rates are defined in config.TAX_BANDS.
