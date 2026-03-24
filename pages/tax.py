@@ -38,6 +38,30 @@ class TaxPage(ScrollFrame):
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
+    def _get_data_years(self):
+        """
+        Return a sorted list (newest first) of years that actually have income,
+        expense, or manual-relief entries in the DB.
+        Falls back to the current year if the DB is completely empty.
+        """
+        years = set()
+        for table in ("income", "expenses", "relief_entries"):
+            try:
+                rows = self.db.conn.execute(
+                    f"SELECT DISTINCT substr(date,1,4) AS yr "
+                    f"FROM {table} WHERE date != ''"
+                ).fetchall()
+                for row in rows:
+                    try:
+                        years.add(int(row[0]))
+                    except (ValueError, TypeError):
+                        pass
+            except Exception:
+                pass
+        if not years:
+            years.add(date.today().year)
+        return sorted(years, reverse=True)
+
     def _build(self):
         inner = self.inner
 
@@ -49,21 +73,28 @@ class TaxPage(ScrollFrame):
                  font=("Segoe UI", 20, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(side="left")
 
-        # Year selector on the right
+        # Year selector on the right — only years with real data
         yr_frame = tk.Frame(title_row, bg=C_BG)
         yr_frame.pack(side="right")
         tk.Label(yr_frame, text="Assessment Year:",
                  font=("Segoe UI", 10), bg=C_BG, fg=C_TEXT_MED
                  ).pack(side="left", padx=(0, 6))
 
-        today_yr    = date.today().year
-        year_range  = [str(y) for y in range(today_yr - 5, today_yr + 2)]
-        self._yr_var = tk.StringVar(value=str(self._tax_year))
+        data_years = self._get_data_years()
+        year_range = [str(y) for y in data_years]
+        cur_yr_str = str(self._tax_year)
+        if cur_yr_str not in year_range:
+            # Default to the most recent year that has data
+            cur_yr_str = year_range[0]
+            self._tax_year = int(cur_yr_str)
+
+        self._yr_var = tk.StringVar(value=cur_yr_str)
         yr_cb = ttk.Combobox(yr_frame, textvariable=self._yr_var,
                              values=year_range, state="readonly",
                              width=6, font=("Segoe UI", 10))
         yr_cb.pack(side="left")
         yr_cb.bind("<<ComboboxSelected>>", self._on_year_change)
+        self._yr_cb_widget = yr_cb  # keep ref for refresh()
 
         tk.Label(inner, text="Malaysia — YA (Year of Assessment)",
                  font=("Segoe UI", 10), bg=C_BG, fg=C_TEXT_MED
@@ -471,6 +502,17 @@ class TaxPage(ScrollFrame):
     # ── Refresh ───────────────────────────────────────────────────────────────
 
     def refresh(self):
+        # Re-build year list in case new data was added since last visit
+        data_years = self._get_data_years()
+        year_strs  = [str(y) for y in data_years]
+        try:
+            self._yr_cb_widget["values"] = year_strs
+            if self._yr_var.get() not in year_strs:
+                self._yr_var.set(year_strs[0])
+                self._tax_year = int(year_strs[0])
+        except AttributeError:
+            pass
+
         yr = self._tax_year
 
         # Income figures — filtered to selected year
