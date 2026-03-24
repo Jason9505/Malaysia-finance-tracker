@@ -12,5 +12,6 @@ from pages.dashboard import DashboardPage
 from pages.income    import IncomePage
 from pages.expenses  import ExpensesPage
 from pages.tax       import TaxPage
+from pages.settings  import SettingsPage
 
-__all__ = ["DashboardPage", "IncomePage", "ExpensesPage", "TaxPage"]
+__all__ = ["DashboardPage", "IncomePage", "ExpensesPage", "TaxPage", "SettingsPage"]

@@ -30,9 +30,10 @@ import tkinter as tk
 from tkinter import ttk
 from datetime import date
 
-from config   import C_BG, C_CARD, C_SIDEBAR, C_SIDEBAR_H, C_SIDEBAR_ACT, C_PRIMARY, NAV_ITEMS
+from config   import (C_BG, C_CARD, C_SIDEBAR, C_SIDEBAR_H, C_SIDEBAR_ACT,
+                      C_PRIMARY, NAV_ITEMS, apply_theme)
 from database import DB
-from pages    import DashboardPage, IncomePage, ExpensesPage, TaxPage
+from pages    import DashboardPage, IncomePage, ExpensesPage, TaxPage, SettingsPage
 
 
 class App(tk.Tk):
@@ -49,6 +50,18 @@ class App(tk.Tk):
         super().__init__()
         self.title("MyKad Financial Tracker – Malaysia")
         self.db = DB()
+
+        # Apply saved theme BEFORE any widgets are built
+        saved_theme = self.db.get_setting("theme", "light")
+        apply_theme(saved_theme)
+        # Re-import colours so sidebar/content frames pick up the new palette
+        import config as _cfg
+        global C_BG, C_SIDEBAR, C_SIDEBAR_H, C_SIDEBAR_ACT, C_PRIMARY
+        C_BG          = _cfg.C_BG
+        C_SIDEBAR     = _cfg.C_SIDEBAR
+        C_SIDEBAR_H   = _cfg.C_SIDEBAR_H
+        C_SIDEBAR_ACT = _cfg.C_SIDEBAR_ACT
+        C_PRIMARY     = _cfg.C_PRIMARY
 
         self._set_geometry()
         self.configure(bg=C_BG)
@@ -187,6 +200,7 @@ class App(tk.Tk):
         "income":    IncomePage,
         "expenses":  ExpensesPage,
         "tax":       TaxPage,
+        "settings":  SettingsPage,
     }
 
     def show_page(self, key: str):
