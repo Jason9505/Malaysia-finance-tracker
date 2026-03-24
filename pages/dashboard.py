@@ -46,6 +46,7 @@ class DashboardPage(ScrollFrame):
         super().__init__(parent)
         self.db = db
         self._mpl_canvases = []
+        self._pie_period_cb = None  # reference for later updates
 
         today = date.today()
         self._pie_month = today.month
@@ -199,6 +200,34 @@ class DashboardPage(ScrollFrame):
 
     # ── Pie header (month / year dropdowns) ──────────────────────────────────
 
+    # ── Expense month-year options from DB ────────────────────────────────────
+
+    def _get_expense_month_years(self):
+        """
+        Query the DB for distinct year-month combos that have expense data.
+        Returns a list like ['March 2025', 'February 2025', ...] sorted newest first.
+        Falls back to the current month/year if no expense data exists at all.
+        """
+        try:
+            rows = self.db.conn.execute(
+                "SELECT DISTINCT substr(date,1,7) AS ym FROM expenses "
+                "WHERE date != '' ORDER BY ym DESC"
+            ).fetchall()
+        except Exception:
+            rows = []
+        result = []
+        for row in rows:
+            ym = row[0] if row[0] else ""
+            try:
+                y, m = int(ym[:4]), int(ym[5:7])
+                result.append(f"{MONTHS[m - 1]} {y}")
+            except (ValueError, IndexError):
+                pass
+        if not result:
+            today = date.today()
+            result = [f"{MONTHS[today.month - 1]} {today.year}"]
+        return result
+
     def _build_pie_header(self, parent):
         hdr = tk.Frame(parent, bg=C_CARD)
         hdr.pack(fill="x", pady=(0, 6))
@@ -210,33 +239,54 @@ class DashboardPage(ScrollFrame):
         nav = tk.Frame(hdr, bg=C_CARD)
         nav.pack(side="right")
 
-        today = date.today()
-        years = [str(y) for y in range(today.year - 3, today.year + 4)]
-        self._pie_year_var = tk.StringVar(value=str(self._pie_year))
-        yr_cb = ttk.Combobox(nav, textvariable=self._pie_year_var,
-                             values=years, state="readonly",
-                             width=6, font=("Segoe UI", 9))
-        yr_cb.pack(side="right", padx=(4, 0))
-        yr_cb.bind("<<ComboboxSelected>>", self._on_pie_select)
-        tk.Label(nav, text="Year:", font=("Segoe UI", 9),
-                 bg=C_CARD, fg=C_TEXT_MED).pack(side="right", padx=(8, 2))
+        tk.Label(nav, text="Period:", font=("Segoe UI", 9),
+                 bg=C_CARD, fg=C_TEXT_MED).pack(side="left", padx=(0, 4))
 
-        self._pie_month_var = tk.StringVar(value=MONTHS[self._pie_month - 1])
-        mo_cb = ttk.Combobox(nav, textvariable=self._pie_month_var,
-                             values=MONTHS, state="readonly",
-                             width=10, font=("Segoe UI", 9))
-        mo_cb.pack(side="right", padx=(4, 0))
-        mo_cb.bind("<<ComboboxSelected>>", self._on_pie_select)
-        tk.Label(nav, text="Month:", font=("Segoe UI", 9),
-                 bg=C_CARD, fg=C_TEXT_MED).pack(side="right", padx=(0, 2))
+        options     = self._get_expense_month_years()
+        default_val = f"{MONTHS[self._pie_month - 1]} {self._pie_year}"
+        if default_val not in options:
+            default_val = options[0]
+            try:
+                parts = default_val.rsplit(" ", 1)
+                self._pie_month = MONTHS.index(parts[0]) + 1
+                self._pie_year  = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        self._pie_period_var = tk.StringVar(value=default_val)
+        self._pie_period_cb  = ttk.Combobox(
+            nav, textvariable=self._pie_period_var,
+            values=options, state="readonly",
+            width=14, font=("Segoe UI", 9))
+        self._pie_period_cb.pack(side="left")
+        self._pie_period_cb.bind("<<ComboboxSelected>>", self._on_pie_select)
 
     def _on_pie_select(self, _e=None):
+        val = self._pie_period_var.get()
         try:
-            self._pie_month = MONTHS.index(self._pie_month_var.get()) + 1
-            self._pie_year  = int(self._pie_year_var.get())
+            parts = val.rsplit(" ", 1)
+            self._pie_month = MONTHS.index(parts[0]) + 1
+            self._pie_year  = int(parts[1])
         except (ValueError, IndexError):
             return
         self._redraw_pie()
+
+    def _refresh_pie_period_options(self):
+        """Update the period combobox values to reflect current DB contents."""
+        if self._pie_period_cb is None:
+            return
+        options = self._get_expense_month_years()
+        self._pie_period_cb["values"] = options
+        current = self._pie_period_var.get()
+        if current not in options:
+            new_val = options[0]
+            self._pie_period_var.set(new_val)
+            try:
+                parts = new_val.rsplit(" ", 1)
+                self._pie_month = MONTHS.index(parts[0]) + 1
+                self._pie_year  = int(parts[1])
+            except (ValueError, IndexError):
+                pass
 
     def _redraw_pie(self):
         if not MPL:
@@ -496,6 +546,7 @@ class DashboardPage(ScrollFrame):
 
     def refresh(self):
         self._update_cards()
+        self._refresh_pie_period_options()
         self._draw_charts()
 
         for item in self._inc_tree.get_children():
