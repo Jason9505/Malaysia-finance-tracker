@@ -4,8 +4,10 @@
 
 import sys
 import os
+import io
 import shutil
 import sqlite3
+import zipfile
 from datetime import date, datetime
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +23,7 @@ from config  import (C_BG, C_CARD, C_TEXT, C_TEXT_MED, C_TEXT_LT,
                      C_PRIMARY, C_PRIMARY_LT, C_ACCENT,
                      DB_PATH, APP_DIR, RECEIPTS_DIR)
 from widgets import Card, ScrollFrame, make_button
-from export  import export_to_excel
+from export  import export_to_excel, export_to_zip
 
 try:
     import openpyxl
@@ -57,39 +59,41 @@ def _row_label(parent, title, subtitle="", bg=C_CARD):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Import helper
+# Import helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _import_from_excel(db, filepath, parent_win):
+def _import_rows(db, wb, receipt_map):
     """
-    Read an .xlsx file exported by this app and insert the rows into the DB.
-    Returns (inc_count, exp_count, rel_count) — number of rows imported.
-    """
-    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    Core import logic shared by both .xlsx and .zip paths.
 
+    receipt_map : dict  basename → absolute_path_on_disk
+                  Pass empty dict when importing plain .xlsx.
+    Returns (inc_count, exp_count, rel_count).
+    """
     inc_count = exp_count = rel_count = 0
 
     # ── Income sheet ──────────────────────────────────────────────────────────
     if "Income" in wb.sheetnames:
-        ws     = wb["Income"]
-        rows   = list(ws.iter_rows(values_only=True))
+        ws   = wb["Income"]
+        rows = list(ws.iter_rows(values_only=True))
         if len(rows) > 1:
-            # header: #, Category, Name, Amount (RM), Date, Notes
             for row in rows[1:]:
                 try:
-                    _, cat, name, amount, dt, notes = (list(row) + [""] * 6)[:6]
+                    # Supports both 6-col (old) and 7-col (with receipt) formats
+                    padded = (list(row) + [""] * 7)[:7]
+                    _, cat, name, amount, dt, notes, rec_base = padded
                     if not name or not amount or not dt:
                         continue
-                    # Skip the TOTAL summary row
                     if str(name).strip().upper() == "TOTAL":
                         continue
                     amount = float(str(amount).replace(",", "").strip())
                     if amount <= 0:
                         continue
-                    cat = str(cat).strip().lower() if cat else "salary"
-                    dt  = str(dt).strip()[:10]
-                    notes = str(notes).strip() if notes else ""
-                    db.add_income(cat, str(name).strip(), amount, dt, notes)
+                    cat    = str(cat).strip().lower() if cat else "salary"
+                    dt     = str(dt).strip()[:10]
+                    notes  = str(notes).strip() if notes else ""
+                    rec_path = receipt_map.get(str(rec_base).strip(), "") if rec_base else ""
+                    db.add_income(cat, str(name).strip(), amount, dt, notes, rec_path)
                     inc_count += 1
                 except Exception:
                     continue
@@ -97,22 +101,20 @@ def _import_from_excel(db, filepath, parent_win):
     # ── Expenses sheet ────────────────────────────────────────────────────────
     if "Expenses" in wb.sheetnames:
         from config import EXPENSE_CATS
-        # Build reverse label→key map
         label_to_key = {v[0].lower(): k for k, v in EXPENSE_CATS.items()}
-
         ws   = wb["Expenses"]
         rows = list(ws.iter_rows(values_only=True))
         if len(rows) > 1:
-            # header: #, Category, Name, Amount (RM), Date, Tax Relief, Notes
             for row in rows[1:]:
                 try:
-                    _, cat_label, name, amount, dt, tax_relief, notes = (
-                        list(row) + [""] * 7)[:7]
+                    # Supports both 7-col (old) and 8-col (with receipt) formats
+                    padded = (list(row) + [""] * 8)[:8]
+                    _, cat_label, name, amount, dt, tax_relief, notes, rec_base = padded
                     if not name or not amount or not dt:
                         continue
                     if str(name).strip().upper() == "TOTAL":
                         continue
-                    amount = float(str(amount).replace(",", "").strip())
+                    amount  = float(str(amount).replace(",", "").strip())
                     if amount <= 0:
                         continue
                     cat_str = str(cat_label).strip().lower() if cat_label else ""
@@ -120,8 +122,9 @@ def _import_from_excel(db, filepath, parent_win):
                     dt      = str(dt).strip()[:10]
                     notes   = str(notes).strip() if notes else ""
                     tax_rel = str(tax_relief).strip() if tax_relief else ""
+                    rec_path = receipt_map.get(str(rec_base).strip(), "") if rec_base else ""
                     db.add_expense(cat_key, str(name).strip(), amount, dt,
-                                   notes, "", tax_rel)
+                                   notes, rec_path, tax_rel)
                     exp_count += 1
                 except Exception:
                     continue
@@ -130,35 +133,84 @@ def _import_from_excel(db, filepath, parent_win):
     if "Tax Reliefs" in wb.sheetnames:
         ws   = wb["Tax Reliefs"]
         rows = list(ws.iter_rows(values_only=True))
-        # Find the "Manual Relief Entries Detail" header row
         detail_start = None
         for i, row in enumerate(rows):
             first = str(row[0]).strip() if row[0] else ""
             if "manual relief entries detail" in first.lower():
-                detail_start = i + 2  # skip header row after it
+                detail_start = i + 2  # skip the sub-header row
                 break
 
         if detail_start is not None:
             for row in rows[detail_start:]:
                 try:
-                    relief_key, name, amount, dt, notes = (
-                        list(row) + [""] * 5)[:5]
+                    # Supports both 5-col (old) and 6-col (with receipt) formats
+                    padded = (list(row) + [""] * 6)[:6]
+                    relief_key, name, amount, dt, notes, rec_base = padded
                     if not relief_key or not amount or not dt:
                         continue
                     amount = float(str(amount).replace(",", "").strip())
                     if amount <= 0:
                         continue
-                    dt     = str(dt).strip()[:10]
-                    notes  = str(notes).strip() if notes else ""
+                    dt       = str(dt).strip()[:10]
+                    notes    = str(notes).strip() if notes else ""
+                    rec_path = receipt_map.get(str(rec_base).strip(), "") if rec_base else ""
                     db.add_relief(str(relief_key).strip(),
                                   str(name).strip() if name else str(relief_key).strip(),
-                                  amount, dt, notes)
+                                  amount, dt, notes, rec_path)
                     rel_count += 1
                 except Exception:
                     continue
 
-    wb.close()
     return inc_count, exp_count, rel_count
+
+
+def _import_from_excel(db, filepath):
+    """Import a plain .xlsx file (no receipts)."""
+    wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    result = _import_rows(db, wb, receipt_map={})
+    wb.close()
+    return result
+
+
+def _import_from_zip(db, filepath):
+    """
+    Import a .zip file exported by this app.
+    1. Extract receipt files into RECEIPTS_DIR.
+    2. Build a basename→path mapping.
+    3. Import the Excel rows using that mapping.
+    Returns (inc_count, exp_count, rel_count, rec_count).
+    """
+    rec_count = 0
+    receipt_map = {}
+
+    with zipfile.ZipFile(filepath, "r") as zf:
+        names = zf.namelist()
+
+        # ── Step 1: extract receipt files ─────────────────────────────────
+        os.makedirs(RECEIPTS_DIR, exist_ok=True)
+        for name in names:
+            if name.startswith("receipts/") and not name.endswith("/"):
+                base     = os.path.basename(name)
+                dest     = os.path.join(RECEIPTS_DIR, base)
+                # Avoid overwriting an existing identical file
+                if not os.path.exists(dest):
+                    with zf.open(name) as src, open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                receipt_map[base] = dest
+                rec_count += 1
+
+        # ── Step 2: find and read the Excel file ──────────────────────────
+        xlsx_names = [n for n in names if n.endswith(".xlsx")]
+        if not xlsx_names:
+            raise ValueError("No .xlsx file found inside the ZIP.")
+
+        with zf.open(xlsx_names[0]) as xf:
+            xlsx_data = xf.read()
+
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_data), read_only=True, data_only=True)
+    inc, exp, rel = _import_rows(db, wb, receipt_map)
+    wb.close()
+    return inc, exp, rel, rec_count
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -313,29 +365,45 @@ class SettingsPage(ScrollFrame):
                     highlightbackground=C_BORDER, highlightthickness=1)
         card.pack(fill="x", padx=28, pady=(0, 4))
 
-        # Export row
+        # Export Excel (data only)
         self._setting_row(
             card,
-            icon="📥", title="Export to Excel",
+            icon="📊", title="Export to Excel  (.xlsx)",
             subtitle="Save all income, expenses, relief entries and a tax summary "
-                     "to a formatted .xlsx spreadsheet.",
+                     "to a formatted spreadsheet. Receipt files are not included.",
             btn_text="Export…",
             btn_bg="#f0fdf4", btn_fg=C_SUCCESS,
-            command=self._do_export,
+            command=self._do_export_excel,
         )
 
         tk.Frame(card, bg=C_BORDER, height=1).pack(fill="x", padx=20)
 
-        # Import row
-        imp_sub = ("Import income, expenses and manual relief entries from a "
-                   ".xlsx file previously exported by this app. "
-                   "Existing data is kept — rows are appended.")
+        # Export ZIP (data + receipts)
+        self._setting_row(
+            card,
+            icon="📦", title="Export with Receipts  (.zip)",
+            subtitle="Save everything in a single ZIP file — the full spreadsheet "
+                     "plus every receipt image and PDF attached to your records. "
+                     "This ZIP can be fully re-imported to restore all data and receipts.",
+            btn_text="Export ZIP…",
+            btn_bg="#f0fdf4", btn_fg=C_SUCCESS,
+            command=self._do_export_zip,
+            btn_state="normal" if OPENPYXL else "disabled",
+        )
+
+        tk.Frame(card, bg=C_BORDER, height=1).pack(fill="x", padx=20)
+
+        # Import (.xlsx or .zip — auto-detected)
+        imp_sub = ("Import from a .xlsx or .zip file previously exported by this app. "
+                   "Existing data is kept — rows are appended.\n"
+                   "• .zip export: receipts are fully restored.\n"
+                   "• .xlsx export: data only — receipts will show as missing.")
         if not OPENPYXL:
             imp_sub += "\n⚠  openpyxl not installed. Run:  pip install openpyxl"
 
         self._setting_row(
             card,
-            icon="📤", title="Import from Excel",
+            icon="📤", title="Import  (.xlsx or .zip)",
             subtitle=imp_sub,
             btn_text="Import…",
             btn_bg="#eff6ff", btn_fg=C_PRIMARY,
@@ -362,8 +430,11 @@ class SettingsPage(ScrollFrame):
                     state=btn_state,
                     ).pack(side="right", padx=(16, 0))
 
-    def _do_export(self):
+    def _do_export_excel(self):
         export_to_excel(self.db, self)
+
+    def _do_export_zip(self):
+        export_to_zip(self.db, self)
 
     def _do_import(self):
         if not OPENPYXL:
@@ -374,23 +445,37 @@ class SettingsPage(ScrollFrame):
             return
 
         filepath = filedialog.askopenfilename(
-            title="Select Excel file to import",
-            filetypes=[("Excel Workbook", "*.xlsx"), ("All Files", "*.*")],
+            title="Select file to import (.xlsx or .zip)",
+            filetypes=[
+                ("Supported files", "*.xlsx *.zip"),
+                ("Excel Workbook",  "*.xlsx"),
+                ("ZIP Archive",     "*.zip"),
+                ("All Files",       "*.*"),
+            ],
             parent=self)
         if not filepath:
             return
 
-        # Confirm before proceeding
-        if not messagebox.askyesno(
-                "Confirm Import",
-                "Rows from the selected file will be APPENDED to your existing data.\n\n"
-                "No existing records will be deleted.\n\n"
-                "Continue?",
-                parent=self):
+        ext = os.path.splitext(filepath)[1].lower()
+        is_zip = (ext == ".zip")
+
+        confirm_msg = (
+            "Rows from the selected file will be APPENDED to your existing data.\n\n"
+            "No existing records will be deleted.\n\n"
+        )
+        if is_zip:
+            confirm_msg += "Receipt files found in the ZIP will be copied to your receipts folder.\n\n"
+        confirm_msg += "Continue?"
+
+        if not messagebox.askyesno("Confirm Import", confirm_msg, parent=self):
             return
 
         try:
-            inc, exp, rel = _import_from_excel(self.db, filepath, self)
+            if is_zip:
+                inc, exp, rel, rec = _import_from_zip(self.db, filepath)
+            else:
+                inc, exp, rel = _import_from_excel(self.db, filepath)
+                rec = 0
         except Exception as err:
             messagebox.showerror("Import Failed",
                                  f"Could not read file:\n{err}", parent=self)
@@ -400,19 +485,18 @@ class SettingsPage(ScrollFrame):
             messagebox.showwarning(
                 "Nothing Imported",
                 "No valid rows were found in the file.\n\n"
-                "Make sure you are importing a file that was exported by this app.",
+                "Make sure you are importing a file exported by this app.",
                 parent=self)
             return
 
-        messagebox.showinfo(
-            "Import Complete",
-            f"Successfully imported:\n\n"
-            f"  💵  Income entries:      {inc}\n"
-            f"  🧾  Expense entries:     {exp}\n"
-            f"  📋  Relief entries:      {rel}",
-            parent=self)
+        msg = (f"Successfully imported:\n\n"
+               f"  💵  Income entries:      {inc}\n"
+               f"  🧾  Expense entries:     {exp}\n"
+               f"  📋  Relief entries:      {rel}\n")
+        if is_zip:
+            msg += f"  📎  Receipt files:      {rec}"
+        messagebox.showinfo("Import Complete", msg, parent=self)
 
-        # Notify other pages to refresh
         self._notify_all()
 
     # ── Section: Backup ───────────────────────────────────────────────────────

@@ -16,7 +16,6 @@ from config  import (C_BG, C_CARD, C_TEXT, C_TEXT_MED, C_TEXT_LT,
                      C_WARNING, C_BORDER, EXPENSE_CATS)
 from utils   import fmt_rm, calc_malaysia_tax
 from widgets import Card, ScrollFrame
-from export  import export_to_excel
 
 try:
     import matplotlib
@@ -60,18 +59,12 @@ class DashboardPage(ScrollFrame):
     def _build(self):
         inner = self.inner
 
-        # Title + export button
+        # Title
         title_row = tk.Frame(inner, bg=C_BG)
         title_row.pack(fill="x", padx=28, pady=(24, 2))
         tk.Label(title_row, text="Dashboard",
                  font=("Segoe UI", 20, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(side="left")
-        from widgets import make_button
-        make_button(title_row, "📥  Export to Excel",
-                    command=lambda: export_to_excel(self.db, self),
-                    bg="#f0fdf4", fg=C_SUCCESS,
-                    font=("Segoe UI", 9, "bold"), pady=5, padx=10
-                    ).pack(side="right")
 
         tk.Label(inner,
                  text=f"Financial Overview  •  {date.today().strftime('%B %Y')}",

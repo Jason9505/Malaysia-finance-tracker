@@ -44,14 +44,48 @@ class ScrollFrame(tk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.vscroll.pack(side="right", fill="y")
         self.canvas.bind("<Configure>", self._on_canvas_resize)
-        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            self.canvas.bind(seq, self._scroll)
+        # Bind scroll globally while mouse is anywhere inside this ScrollFrame.
+        # We use <Enter> to arm and a root-level <Motion> check to disarm,
+        # which avoids the problem of <Leave> firing when hovering child widgets.
+        self.bind("<Enter>", self._enable_scroll)
+        self.canvas.bind("<Enter>", self._enable_scroll)
+        self.inner.bind("<Enter>",  self._enable_scroll)
+        self.bind("<Leave>", self._on_leave)
 
     def _on_inner_configure(self, _e):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _on_canvas_resize(self, event):
         self.canvas.itemconfig("inner", width=event.width)
+
+    def _enable_scroll(self, _e=None):
+        self.canvas.bind_all("<MouseWheel>", self._scroll)
+        self.canvas.bind_all("<Button-4>",   self._scroll)
+        self.canvas.bind_all("<Button-5>",   self._scroll)
+
+    def _on_leave(self, event):
+        # Only disable if the mouse truly left this ScrollFrame (not just
+        # moved to a child widget inside it).
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+            if widget is not None:
+                # Check whether the widget under the cursor is inside self
+                w = widget
+                while w is not None:
+                    if w is self:
+                        return   # still inside — keep scroll active
+                    try:
+                        w = w.master
+                    except AttributeError:
+                        break
+        except Exception:
+            pass
+        self._disable_scroll()
+
+    def _disable_scroll(self, _e=None):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
 
     def _scroll(self, event):
         if event.num == 4 or event.delta > 0:
