@@ -60,7 +60,7 @@ def _income_sheet(wb, db, with_receipts=False):
 
     rows = db.get_income()
     for i, r in enumerate(rows, 1):
-        rec_base = os.path.basename(r["receipt"]) if r.get("receipt") else ""
+        rec_base = os.path.basename(r["receipt"]) if r["receipt"] else ""
         row_data = [i, r["category"].capitalize(), r["name"],
                     r["amount"], r["date"], r["notes"] or ""]
         if with_receipts:
@@ -89,7 +89,7 @@ def _expenses_sheet(wb, db, with_receipts=False):
     rows = db.get_expenses()
     for i, r in enumerate(rows, 1):
         cat      = EXPENSE_CATS.get(r["category"], (r["category"],))[0]
-        rec_base = os.path.basename(r["receipt"]) if r.get("receipt") else ""
+        rec_base = os.path.basename(r["receipt"]) if r["receipt"] else ""
         row_data = [i, cat, r["name"], r["amount"],
                     r["date"], r["tax_relief"] or "", r["notes"] or ""]
         if with_receipts:
@@ -140,7 +140,7 @@ def _reliefs_sheet(wb, db, with_receipts=False):
     _header(ws, detail_headers, row=ws.max_row+1, bg="e0e7ff", fg="1e293b")
 
     for r in manual_all:
-        rec_base = os.path.basename(r["receipt"]) if r.get("receipt") else ""
+        rec_base = os.path.basename(r["receipt"]) if r["receipt"] else ""
         row_data = [r["relief_key"], r["name"], r["amount"],
                     r["date"], r["notes"] or ""]
         if with_receipts:
@@ -193,8 +193,12 @@ def _collect_receipt_paths(db):
     exists on disk.  Duplicates (same basename) keep the first path found.
     """
     receipts = {}
-    for row in list(db.get_income()) + list(db.get_expenses()) + list(db.get_reliefs()):
-        path = row.get("receipt", "") or ""
+    all_rows = list(db.get_income()) + list(db.get_expenses()) + list(db.get_reliefs())
+    for row in all_rows:
+        try:
+            path = row["receipt"] or ""
+        except (IndexError, KeyError):
+            path = ""
         if path and os.path.isfile(path):
             base = os.path.basename(path)
             if base not in receipts:
