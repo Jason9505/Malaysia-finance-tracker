@@ -106,4 +106,82 @@ NAV_ITEMS = [
     ("Income",     "💵", "income"),
     ("Expenses",   "🧾", "expenses"),
     ("Income Tax", "📋", "tax"),
+    ("Settings",   "⚙️",  "settings"),
 ]
+
+# ── Theme palettes ────────────────────────────────────────────────────────────
+_LIGHT_PALETTE = dict(
+    C_SIDEBAR     = "#1e1b4b",
+    C_SIDEBAR_H   = "#312e81",
+    C_SIDEBAR_ACT = "#4f46e5",
+    C_BG          = "#f1f5f9",
+    C_CARD        = "#ffffff",
+    C_PRIMARY     = "#4f46e5",
+    C_PRIMARY_LT  = "#e0e7ff",
+    C_SUCCESS     = "#10b981",
+    C_DANGER      = "#ef4444",
+    C_WARNING     = "#f59e0b",
+    C_TEXT        = "#1e293b",
+    C_TEXT_MED    = "#64748b",
+    C_TEXT_LT     = "#94a3b8",
+    C_BORDER      = "#e2e8f0",
+    C_ACCENT      = "#7c3aed",
+)
+
+_DARK_PALETTE = dict(
+    C_SIDEBAR     = "#0d0b1e",
+    C_SIDEBAR_H   = "#1a1850",
+    C_SIDEBAR_ACT = "#4f46e5",
+    C_BG          = "#0f172a",
+    C_CARD        = "#1e293b",
+    C_PRIMARY     = "#818cf8",
+    C_PRIMARY_LT  = "#1e1b4b",
+    C_SUCCESS     = "#34d399",
+    C_DANGER      = "#f87171",
+    C_WARNING     = "#fbbf24",
+    C_TEXT        = "#f1f5f9",
+    C_TEXT_MED    = "#94a3b8",
+    C_TEXT_LT     = "#475569",
+    C_BORDER      = "#334155",
+    C_ACCENT      = "#a78bfa",
+)
+
+def _detect_system_dark() -> bool:
+    """Best-effort system dark-mode detection (Windows/macOS/Linux)."""
+    try:
+        import darkdetect            # pip install darkdetect (optional)
+        return darkdetect.isDark()
+    except Exception:
+        pass
+    try:
+        import subprocess, sys
+        if sys.platform == "win32":
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                r"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+            val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return val == 0
+        if sys.platform == "darwin":
+            out = subprocess.check_output(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                stderr=subprocess.DEVNULL).decode().strip()
+            return out.lower() == "dark"
+    except Exception:
+        pass
+    return False
+
+def apply_theme(theme_name: str) -> None:
+    """
+    Update every module-level colour constant in config for the chosen theme.
+    theme_name: 'light' | 'dark' | 'system'
+    """
+    import sys
+    mod = sys.modules[__name__]
+    if theme_name == "dark":
+        palette = _DARK_PALETTE
+    elif theme_name == "system":
+        palette = _DARK_PALETTE if _detect_system_dark() else _LIGHT_PALETTE
+    else:
+        palette = _LIGHT_PALETTE
+    for k, v in palette.items():
+        setattr(mod, k, v)
