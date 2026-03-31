@@ -48,7 +48,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("MyKad Financial Tracker – Malaysia")
+        self.title("Financial Tracker – Malaysia Edition")
         self.db = DB()
 
         # ── Apply saved theme BEFORE any page widgets are built ───────────────
