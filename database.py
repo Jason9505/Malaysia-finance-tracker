@@ -48,6 +48,18 @@ class DB:
             value TEXT
         );
         """)
+
+        # FIX (Perf): Add indexes on columns used in WHERE/ORDER BY clauses.
+        # CREATE INDEX IF NOT EXISTS is idempotent — safe to call every startup.
+        self.conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_income_date     ON income (date);
+        CREATE INDEX IF NOT EXISTS idx_income_category ON income (category);
+        CREATE INDEX IF NOT EXISTS idx_expenses_date       ON expenses (date);
+        CREATE INDEX IF NOT EXISTS idx_expenses_category   ON expenses (category);
+        CREATE INDEX IF NOT EXISTS idx_expenses_tax_relief ON expenses (tax_relief);
+        CREATE INDEX IF NOT EXISTS idx_relief_key  ON relief_entries (relief_key);
+        CREATE INDEX IF NOT EXISTS idx_relief_date ON relief_entries (date);
+        """)
         self.conn.commit()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -119,6 +131,42 @@ class DB:
             params).fetchone()[0]
         return float(val)
 
+    # FIX (Perf): SQL-filtered income for a date prefix — used by dashboard charts.
+    def get_income_month(self, year, month):
+        """Return all income rows for the given year+month via SQL filtering."""
+        prefix = f"{year}-{month:02d}-%"
+        return self.conn.execute(
+            "SELECT * FROM income WHERE date LIKE ? ORDER BY date DESC",
+            (prefix,)).fetchall()
+
+    # FIX (Bug): Wrapped method so pages never call db.conn directly.
+    def get_distinct_years(self):
+        """Return sorted list (newest first) of years with any data."""
+        years = set()
+        for table in ("income", "expenses", "relief_entries"):
+            rows = self.conn.execute(
+                f"SELECT DISTINCT substr(date,1,4) AS yr "
+                f"FROM {table} WHERE date != ''"
+            ).fetchall()
+            for row in rows:
+                try:
+                    years.add(int(row[0]))
+                except (ValueError, TypeError):
+                    pass
+        if not years:
+            from datetime import date
+            years.add(date.today().year)
+        return sorted(years, reverse=True)
+
+    # FIX (Bug): Wrapped method for expense month-year combos used by dashboard.
+    def get_expense_month_years(self):
+        """Return list of 'YYYY-MM' strings (newest first) that have expenses."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT substr(date,1,7) AS ym FROM expenses "
+            "WHERE date != '' ORDER BY ym DESC"
+        ).fetchall()
+        return [row[0] for row in rows if row[0]]
+
     # ── Expenses ──────────────────────────────────────────────────────────────
 
     def add_expense(self, category, name, amount, date,
@@ -183,6 +231,14 @@ class DB:
             f"SELECT COALESCE(SUM(amount),0) FROM expenses {where}",
             params).fetchone()[0]
         return float(val)
+
+    # FIX (Perf): SQL-filtered expenses for a date prefix — used by dashboard charts.
+    def get_expenses_month(self, year, month):
+        """Return all expense rows for the given year+month via SQL filtering."""
+        prefix = f"{year}-{month:02d}-%"
+        return self.conn.execute(
+            "SELECT * FROM expenses WHERE date LIKE ? ORDER BY date DESC",
+            (prefix,)).fetchall()
 
     def tax_deductible_by_relief(self):
         rows = self.conn.execute(
@@ -259,6 +315,25 @@ class DB:
             "SELECT COALESCE(SUM(amount),0) FROM relief_entries WHERE relief_key=?",
             (relief_key,)).fetchone()[0]
         return float(val)
+
+    # FIX (Bug): Compute total reliefs for a year via SQL — used by dashboard.
+    def total_reliefs_year(self, year=None):
+        """
+        Sum all claimed reliefs (auto + manual) for the given year, capped per
+        relief category.  Returns a single float ready for tax computation.
+        """
+        from config import ALL_RELIEFS
+        auto_map = self.tax_deductible_by_relief_year(year=year)
+        manual_rows = self.get_reliefs_year(year=year)
+        manual_by_key = {}
+        for row in manual_rows:
+            manual_by_key.setdefault(row["relief_key"], []).append(row)
+        total = 0.0
+        for key, _name, max_rm in ALL_RELIEFS:
+            auto_amt   = auto_map.get(key, 0.0)
+            manual_amt = sum(r["amount"] for r in manual_by_key.get(key, []))
+            total += min(auto_amt + manual_amt, max_rm)
+        return total
 
     def clear_receipt(self, table, row_id):
         """Wipe a broken receipt path without deleting the entry."""

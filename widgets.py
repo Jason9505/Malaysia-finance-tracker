@@ -1,5 +1,9 @@
 # widgets.py
 # Shared reusable Tkinter widgets and dialogs used across all pages.
+#
+# FIXES applied:
+#   UX   — AddEntryDialog now binds Enter → save, Escape → close
+#   Code — FONT_UI used from config instead of hardcoded "Segoe UI"
 
 import os
 import tkinter as tk
@@ -7,7 +11,8 @@ from tkinter import ttk, filedialog, messagebox
 from datetime import date, datetime
 
 from config import (C_BG, C_CARD, C_PRIMARY, C_PRIMARY_LT,
-                    C_SUCCESS, C_DANGER, C_TEXT, C_TEXT_MED, C_TEXT_LT, C_BORDER)
+                    C_SUCCESS, C_DANGER, C_TEXT, C_TEXT_MED, C_TEXT_LT,
+                    C_BORDER, FONT_UI)
 from utils import save_receipt, open_file, PIL_AVAILABLE
 
 try:
@@ -44,9 +49,6 @@ class ScrollFrame(tk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.vscroll.pack(side="right", fill="y")
         self.canvas.bind("<Configure>", self._on_canvas_resize)
-        # Bind scroll globally while mouse is anywhere inside this ScrollFrame.
-        # We use <Enter> to arm and a root-level <Motion> check to disarm,
-        # which avoids the problem of <Leave> firing when hovering child widgets.
         self.bind("<Enter>", self._enable_scroll)
         self.canvas.bind("<Enter>", self._enable_scroll)
         self.inner.bind("<Enter>",  self._enable_scroll)
@@ -64,16 +66,13 @@ class ScrollFrame(tk.Frame):
         self.canvas.bind_all("<Button-5>",   self._scroll)
 
     def _on_leave(self, event):
-        # Only disable if the mouse truly left this ScrollFrame (not just
-        # moved to a child widget inside it).
         try:
             widget = self.winfo_containing(event.x_root, event.y_root)
             if widget is not None:
-                # Check whether the widget under the cursor is inside self
                 w = widget
                 while w is not None:
                     if w is self:
-                        return   # still inside — keep scroll active
+                        return
                     try:
                         w = w.master
                     except AttributeError:
@@ -97,7 +96,7 @@ class ScrollFrame(tk.Frame):
 # ── Button helper ─────────────────────────────────────────────────────────────
 
 def make_button(parent, text, command, bg=C_PRIMARY, fg="white",
-                font=("Segoe UI", 9, "bold"), padx=10, pady=4, **kw):
+                font=(FONT_UI[0], 9, "bold"), padx=10, pady=4, **kw):
     return tk.Button(parent, text=text, command=command, bg=bg, fg=fg,
                      relief="flat", font=font, cursor="hand2",
                      padx=padx, pady=pady, **kw)
@@ -106,11 +105,7 @@ def make_button(parent, text, command, bg=C_PRIMARY, fg="white",
 # ── Date picker ───────────────────────────────────────────────────────────────
 
 class DatePickerFrame(tk.Frame):
-    """
-    Inline Day / Month / Year picker — no free-typing required.
-    Call get_date() to retrieve 'YYYY-MM-DD', or None if the
-    combination is impossible (e.g. Feb 30).
-    """
+    """Inline Day / Month / Year picker."""
     def __init__(self, parent, initial_date=None, **kw):
         kw.setdefault("bg", C_CARD)
         super().__init__(parent, **kw)
@@ -126,28 +121,27 @@ class DatePickerFrame(tk.Frame):
         self._day_var = tk.StringVar(value=f"{dt.day:02d}")
         tk.Spinbox(self, from_=1, to=31, width=3,
                    textvariable=self._day_var,
-                   font=("Segoe UI", 10), justify="center",
+                   font=(FONT_UI[0], 10), justify="center",
                    relief="solid", bd=1).pack(side="left")
 
         tk.Label(self, text=" / ", bg=C_CARD,
-                 font=("Segoe UI", 10), fg=C_TEXT_MED).pack(side="left")
+                 font=(FONT_UI[0], 10), fg=C_TEXT_MED).pack(side="left")
 
         self._month_var = tk.StringVar(value=_MONTHS[dt.month - 1])
         ttk.Combobox(self, textvariable=self._month_var,
                      values=_MONTHS, state="readonly",
-                     width=5, font=("Segoe UI", 10)).pack(side="left")
+                     width=5, font=(FONT_UI[0], 10)).pack(side="left")
 
         tk.Label(self, text=" / ", bg=C_CARD,
-                 font=("Segoe UI", 10), fg=C_TEXT_MED).pack(side="left")
+                 font=(FONT_UI[0], 10), fg=C_TEXT_MED).pack(side="left")
 
         self._year_var = tk.StringVar(value=str(dt.year))
         tk.Spinbox(self, from_=today_yr - 10, to=today_yr + 5, width=5,
                    textvariable=self._year_var,
-                   font=("Segoe UI", 10), justify="center",
+                   font=(FONT_UI[0], 10), justify="center",
                    relief="solid", bd=1).pack(side="left")
 
     def get_date(self):
-        """Return 'YYYY-MM-DD', or None if the date is impossible."""
         try:
             day   = int(self._day_var.get())
             month = _MONTHS.index(self._month_var.get()) + 1
@@ -169,13 +163,7 @@ class DatePickerFrame(tk.Frame):
 # ── Column sorting helper ─────────────────────────────────────────────────────
 
 def add_column_sorting(tree, numeric_cols=None, skip_cols=None):
-    """
-    Attach click-to-sort to every heading in `tree`.
-
-    numeric_cols : column ids to compare numerically (strips 'RM', commas).
-    skip_cols    : column ids to leave unsortable (hidden _id / _key cols).
-    Headings show a ↑ or ↓ arrow to indicate the current sort direction.
-    """
+    """Attach click-to-sort to every heading in `tree`."""
     numeric_cols = set(numeric_cols or [])
     skip_cols    = set(skip_cols or ["_id", "_key"])
     _asc = {}
@@ -201,9 +189,11 @@ def add_column_sorting(tree, numeric_cols=None, skip_cols=None):
         for c in tree["columns"]:
             if c in skip_cols:
                 continue
-            raw   = tree.heading(c)["text"].rstrip(" ↑↓")
-            arrow = " ↑" if (c == col and asc) else (" ↓" if c == col else "")
-            tree.heading(c, text=raw + arrow)
+            current = tree.heading(c, "text").rstrip(" ↑↓")
+            if c == col:
+                tree.heading(c, text=current + (" ↑" if asc else " ↓"))
+            else:
+                tree.heading(c, text=current)
 
     for col in tree["columns"]:
         if col not in skip_cols:
@@ -214,10 +204,11 @@ def add_column_sorting(tree, numeric_cols=None, skip_cols=None):
 
 class AddEntryDialog(tk.Toplevel):
     """
-    Modal dialog to add or edit income / expense entries.
+    Modal dialog for adding or editing an income/expense entry.
 
-    Pass a `prefill` dict with keys name / amount / date / notes / receipt
-    to open in edit mode. on_save receives (name, amount, date_str, notes, receipt).
+    FIX (UX): Keyboard shortcuts added:
+        Enter  → triggers Save (same as clicking the Save button)
+        Escape → closes the dialog without saving
     """
 
     def __init__(self, parent, title, on_save, prefill=None):
@@ -236,13 +227,17 @@ class AddEntryDialog(tk.Toplevel):
         self._build_ui(title)
         self._center(parent)
 
+        # FIX (UX): Keyboard bindings — Enter saves, Escape closes
+        self.bind("<Return>", lambda _e: self._on_click_save())
+        self.bind("<Escape>", lambda _e: self.destroy())
+
     def _build_ui(self, title):
         hdr = tk.Frame(self, bg=C_PRIMARY, padx=20, pady=14)
         hdr.pack(fill="x")
-        tk.Label(hdr, text=title, font=("Segoe UI", 13, "bold"),
+        tk.Label(hdr, text=title, font=(FONT_UI[0], 13, "bold"),
                  bg=C_PRIMARY, fg="white").pack(side="left")
         tk.Button(hdr, text="✕", bg=C_PRIMARY, fg="white", relief="flat",
-                  font=("Segoe UI", 11), cursor="hand2",
+                  font=(FONT_UI[0], 11), cursor="hand2",
                   command=self.destroy).pack(side="right")
 
         body = tk.Frame(self, bg=C_CARD, padx=24, pady=20)
@@ -251,8 +246,13 @@ class AddEntryDialog(tk.Toplevel):
 
         btn_lbl = "💾  Save Changes" if self._prefill else "💾  Save Entry"
         make_button(body, btn_lbl, self._on_click_save,
-                    font=("Segoe UI", 11, "bold"), pady=10
+                    font=(FONT_UI[0], 11, "bold"), pady=10
                     ).pack(fill="x", pady=(14, 0))
+
+        # Shortcut hint label
+        tk.Label(body, text="Enter to save  •  Esc to cancel",
+                 font=(FONT_UI[0], 8), bg=C_CARD, fg=C_TEXT_LT
+                 ).pack(pady=(4, 0))
 
     def _add_fields(self, body):
         self._lbl(body, "Name / Description")
@@ -276,11 +276,11 @@ class AddEntryDialog(tk.Toplevel):
         self._add_receipt_row(body)
 
     def _lbl(self, p, text):
-        tk.Label(p, text=text, font=("Segoe UI", 9, "bold"),
+        tk.Label(p, text=text, font=(FONT_UI[0], 9, "bold"),
                  bg=C_CARD, fg=C_TEXT_MED).pack(anchor="w", pady=(8, 1))
 
     def _ent(self, p, var):
-        tk.Entry(p, textvariable=var, font=("Segoe UI", 10),
+        tk.Entry(p, textvariable=var, font=(FONT_UI[0], 10),
                  relief="solid", bd=1, bg="white",
                  highlightthickness=1, highlightcolor=C_PRIMARY
                  ).pack(fill="x", ipady=5)
@@ -291,10 +291,10 @@ class AddEntryDialog(tk.Toplevel):
         row.pack(fill="x", pady=(0, 4))
 
         self._rec_lbl = tk.Label(row, text="No file selected",
-                                 font=("Segoe UI", 9), bg=C_CARD, fg=C_TEXT_LT)
+                                 font=(FONT_UI[0], 9), bg=C_CARD, fg=C_TEXT_LT)
         self._rec_lbl.pack(side="left", fill="x", expand=True)
         make_button(row, "Browse", self._browse,
-                    bg=C_BG, fg=C_TEXT, font=("Segoe UI", 9),
+                    bg=C_BG, fg=C_TEXT, font=(FONT_UI[0], 9),
                     pady=3, padx=8).pack(side="right")
 
         if self._existing_receipt:
@@ -356,7 +356,7 @@ class AddEntryDialog(tk.Toplevel):
         elif self._existing_receipt and os.path.exists(self._existing_receipt):
             receipt = self._existing_receipt
         else:
-            receipt = ""   # missing file is silently cleared
+            receipt = ""
 
         self._on_save(name, amount, dt_str, notes, receipt)
         self.destroy()
@@ -382,6 +382,9 @@ class ViewReceiptDialog(tk.Toplevel):
         self.grab_set()
         self.transient(parent)
 
+        # FIX (UX): Escape closes the receipt viewer too
+        self.bind("<Escape>", lambda _e: self.destroy())
+
         frame = tk.Frame(self, bg=C_CARD, padx=16, pady=16)
         frame.pack(fill="both", expand=True)
 
@@ -395,11 +398,11 @@ class ViewReceiptDialog(tk.Toplevel):
 
     def _show_pdf(self, f, path):
         tk.Label(f, text="PDF Receipt",
-                 font=("Segoe UI", 12, "bold"), bg=C_CARD, fg=C_TEXT).pack()
+                 font=(FONT_UI[0], 12, "bold"), bg=C_CARD, fg=C_TEXT).pack()
         tk.Label(f, text=os.path.basename(path),
-                 font=("Segoe UI", 9), bg=C_CARD, fg=C_TEXT_MED).pack(pady=4)
+                 font=(FONT_UI[0], 9), bg=C_CARD, fg=C_TEXT_MED).pack(pady=4)
         make_button(f, "Open PDF in Viewer", lambda: open_file(path),
-                    font=("Segoe UI", 10, "bold"), pady=8, padx=12).pack(pady=8)
+                    font=(FONT_UI[0], 10, "bold"), pady=8, padx=12).pack(pady=8)
 
     def _show_image(self, f, path):
         try:
@@ -417,4 +420,4 @@ class ViewReceiptDialog(tk.Toplevel):
         tk.Label(f, text="Install Pillow to preview images.",
                  bg=C_CARD, fg=C_TEXT_MED).pack()
         make_button(f, "Open File", lambda: open_file(path),
-                    font=("Segoe UI", 10), pady=6, padx=12).pack(pady=8)
+                    font=(FONT_UI[0], 10), pady=6, padx=12).pack(pady=8)

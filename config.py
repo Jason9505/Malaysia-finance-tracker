@@ -4,15 +4,17 @@
 import os
 
 # ── App paths (Windows-safe) ──────────────────────────────────────────────────
-# Stored inside Documents\mykad_tracker — always writable on Windows
-# Data folder sits inside the project directory:
-#   ...\personal coding project\finance tracker app\data\
 _BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 APP_DIR      = os.path.join(_BASE_DIR, "data")
 DB_PATH      = os.path.join(APP_DIR, "tracker.db")
 RECEIPTS_DIR = os.path.join(APP_DIR, "receipts")
 os.makedirs(APP_DIR,      exist_ok=True)
 os.makedirs(RECEIPTS_DIR, exist_ok=True)
+
+# ── Cross-platform font stack ─────────────────────────────────────────────────
+# FIX (Code): Segoe UI is Windows-only; define a tuple fallback used everywhere.
+FONT_UI   = ("Segoe UI", "Helvetica Neue", "Arial")
+FONT_MONO = ("Consolas", "Menlo", "DejaVu Sans Mono")
 
 # ── Color palette ─────────────────────────────────────────────────────────────
 C_SIDEBAR     = "#1e1b4b"
@@ -32,7 +34,6 @@ C_BORDER      = "#e2e8f0"
 C_ACCENT      = "#7c3aed"
 
 # ── Malaysia tax reliefs YA 2025 ──────────────────────────────────────────────
-# Each entry: (key, display_name, max_relief_rm)
 ALL_RELIEFS = [
     ("individual",        "Individual & Dependent Relatives",                9000),
     ("disabled_self",     "Disabled Individual (extra)",                     7000),
@@ -67,7 +68,6 @@ ALL_RELIEFS = [
 ]
 
 # ── Expense categories ────────────────────────────────────────────────────────
-# key: (display_label, is_tax_deductible, linked_relief_key)
 EXPENSE_CATS = {
     "food":       ("Food & Dining",              False, ""),
     "education":  ("Education",                   True,  "education_self"),
@@ -84,7 +84,6 @@ EXPENSE_CATS = {
 }
 
 # ── Progressive tax bands YA 2025 ─────────────────────────────────────────────
-# (band_size, rate, display_label)
 TAX_BANDS = [
     (5_000,       0.00,  "RM 0 - RM 5,000"),
     (15_000,      0.01,  "RM 5,001 - RM 20,000"),
@@ -147,9 +146,8 @@ _DARK_PALETTE = dict(
 )
 
 def _detect_system_dark() -> bool:
-    """Best-effort system dark-mode detection (Windows/macOS/Linux)."""
     try:
-        import darkdetect            # pip install darkdetect (optional)
+        import darkdetect
         return darkdetect.isDark()
     except Exception:
         pass

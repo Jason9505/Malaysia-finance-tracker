@@ -1,34 +1,26 @@
 # pages/tax.py
 # Income Tax page — year selector, relief notes, edit relief,
 # broken-receipt detection, column sorting.
+#
+# FIXES applied:
+#   Bug  — db.conn.execute replaced with db.get_distinct_years() wrapper
+#   Code — sys.path block removed (handled by pages/__init__.py)
+#   Code — FONT_UI used from config
 
-import sys, os
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_DIR not in sys.path:
-    sys.path.insert(0, _PROJECT_DIR)
-
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import date
 
 from config  import (C_BG, C_CARD, C_TEXT, C_TEXT_MED, C_TEXT_LT,
                      C_SUCCESS, C_DANGER, C_WARNING, C_BORDER,
-                     C_PRIMARY, C_PRIMARY_LT, ALL_RELIEFS)
+                     C_PRIMARY, C_PRIMARY_LT, ALL_RELIEFS, FONT_UI)
 from utils   import fmt_rm, compute_full_tax, build_bracket_rows, save_receipt
 from widgets import (Card, ScrollFrame, ViewReceiptDialog,
                      make_button, DatePickerFrame, add_column_sorting)
 
 
 class TaxPage(ScrollFrame):
-    """
-    Income Tax Calculator — Malaysia Assessment Year selector.
-
-    - Year dropdown at the top filters all income, expenses and manual reliefs
-      to only entries dated within that year.
-    - Manual reliefs now include a Notes column and an Edit button.
-    - Broken receipt links are detected and offer to be cleared.
-    - Relief table is sortable by column heading.
-    """
 
     def __init__(self, parent, db):
         super().__init__(parent)
@@ -40,64 +32,44 @@ class TaxPage(ScrollFrame):
 
     def _get_data_years(self):
         """
-        Return a sorted list (newest first) of years that actually have income,
-        expense, or manual-relief entries in the DB.
-        Falls back to the current year if the DB is completely empty.
+        FIX (Bug): Use db.get_distinct_years() wrapper instead of
+        querying the connection directly from page code.
         """
-        years = set()
-        for table in ("income", "expenses", "relief_entries"):
-            try:
-                rows = self.db.conn.execute(
-                    f"SELECT DISTINCT substr(date,1,4) AS yr "
-                    f"FROM {table} WHERE date != ''"
-                ).fetchall()
-                for row in rows:
-                    try:
-                        years.add(int(row[0]))
-                    except (ValueError, TypeError):
-                        pass
-            except Exception:
-                pass
-        if not years:
-            years.add(date.today().year)
-        return sorted(years, reverse=True)
+        return self.db.get_distinct_years()
 
     def _build(self):
         inner = self.inner
 
-        # ── Title row with year selector ──────────────
         title_row = tk.Frame(inner, bg=C_BG)
         title_row.pack(fill="x", padx=28, pady=(24, 2))
 
         tk.Label(title_row, text="Income Tax Calculator",
-                 font=("Segoe UI", 20, "bold"), bg=C_BG, fg=C_TEXT
+                 font=(FONT_UI[0], 20, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(side="left")
 
-        # Year selector on the right — only years with real data
         yr_frame = tk.Frame(title_row, bg=C_BG)
         yr_frame.pack(side="right")
         tk.Label(yr_frame, text="Assessment Year:",
-                 font=("Segoe UI", 10), bg=C_BG, fg=C_TEXT_MED
+                 font=(FONT_UI[0], 10), bg=C_BG, fg=C_TEXT_MED
                  ).pack(side="left", padx=(0, 6))
 
         data_years = self._get_data_years()
         year_range = [str(y) for y in data_years]
         cur_yr_str = str(self._tax_year)
         if cur_yr_str not in year_range:
-            # Default to the most recent year that has data
             cur_yr_str = year_range[0]
             self._tax_year = int(cur_yr_str)
 
         self._yr_var = tk.StringVar(value=cur_yr_str)
         yr_cb = ttk.Combobox(yr_frame, textvariable=self._yr_var,
                              values=year_range, state="readonly",
-                             width=6, font=("Segoe UI", 10))
+                             width=6, font=(FONT_UI[0], 10))
         yr_cb.pack(side="left")
         yr_cb.bind("<<ComboboxSelected>>", self._on_year_change)
-        self._yr_cb_widget = yr_cb  # keep ref for refresh()
+        self._yr_cb_widget = yr_cb
 
         tk.Label(inner, text="Malaysia — YA (Year of Assessment)",
-                 font=("Segoe UI", 10), bg=C_BG, fg=C_TEXT_MED
+                 font=(FONT_UI[0], 10), bg=C_BG, fg=C_TEXT_MED
                  ).pack(anchor="w", padx=28, pady=(0, 12))
 
         self._build_income_summary(inner)
@@ -122,7 +94,7 @@ class TaxPage(ScrollFrame):
         card.pack(fill="x", padx=28, pady=(4, 8))
 
         tk.Label(card, text="💵  Income Sources",
-                 font=("Segoe UI", 12, "bold"), bg=C_CARD, fg=C_TEXT
+                 font=(FONT_UI[0], 12, "bold"), bg=C_CARD, fg=C_TEXT
                  ).pack(anchor="w", pady=(0, 8))
 
         grid = tk.Frame(card, bg=C_CARD)
@@ -136,11 +108,11 @@ class TaxPage(ScrollFrame):
             ("Gross Taxable Income",     "total",     C_SUCCESS,  "bold"),
         ]
         for i, (display, key, color, weight) in enumerate(rows):
-            tk.Label(grid, text=display, font=("Segoe UI", 10),
+            tk.Label(grid, text=display, font=(FONT_UI[0], 10),
                      bg=C_CARD, fg=C_TEXT
                      ).grid(row=i, column=0, sticky="w", pady=3)
             lbl = tk.Label(grid, text="RM 0.00",
-                           font=("Segoe UI", 10, weight), bg=C_CARD, fg=color)
+                           font=(FONT_UI[0], 10, weight), bg=C_CARD, fg=color)
             lbl.grid(row=i, column=1, sticky="e", pady=3)
             self._inc_labels[key] = lbl
 
@@ -148,12 +120,12 @@ class TaxPage(ScrollFrame):
 
     def _build_relief_section(self, parent):
         tk.Label(parent, text="📉  Tax Reliefs & Deductions",
-                 font=("Segoe UI", 13, "bold"), bg=C_BG, fg=C_TEXT
+                 font=(FONT_UI[0], 13, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(anchor="w", padx=28, pady=(12, 2))
         tk.Label(parent,
                  text="  Auto-reliefs come from your expense entries. "
                       "Add manual entries for reliefs not linked to an expense.",
-                 font=("Segoe UI", 9, "italic"), bg=C_BG, fg=C_TEXT_MED,
+                 font=(FONT_UI[0], 9, "italic"), bg=C_BG, fg=C_TEXT_MED,
                  wraplength=800, justify="left"
                  ).pack(anchor="w", padx=28, pady=(0, 6))
 
@@ -161,7 +133,6 @@ class TaxPage(ScrollFrame):
                     highlightbackground=C_BORDER, highlightthickness=1)
         card.pack(fill="x", padx=28, pady=(0, 4))
 
-        # Relief treeview — includes Notes column
         r_cols = [
             ("category",   "Relief Category",  240, "w",      True),
             ("max_rm",     "Max (RM)",          100, "e",      False),
@@ -196,35 +167,34 @@ class TaxPage(ScrollFrame):
                                          foreground=C_PRIMARY)
         self._relief_tree.tag_configure("broken", foreground=C_WARNING)
 
-        # Action buttons
         bar = tk.Frame(parent, bg=C_BG)
         bar.pack(fill="x", padx=28, pady=(4, 4))
 
         make_button(bar, "➕  Add Manual Relief",
                     self._open_add_relief,
-                    font=("Segoe UI", 9, "bold"), pady=5, padx=12
+                    font=(FONT_UI[0], 9, "bold"), pady=5, padx=12
                     ).pack(side="left")
         make_button(bar, "✏  Edit Selected",
                     self._open_edit_relief,
                     bg=C_PRIMARY_LT, fg=C_PRIMARY,
-                    font=("Segoe UI", 9), pady=5, padx=10
+                    font=(FONT_UI[0], 9), pady=5, padx=10
                     ).pack(side="left", padx=6)
         make_button(bar, "🗑  Delete Selected",
                     self._delete_relief,
                     bg="#fff1f2", fg=C_DANGER,
-                    font=("Segoe UI", 9), pady=5, padx=10
+                    font=(FONT_UI[0], 9), pady=5, padx=10
                     ).pack(side="left")
         make_button(bar, "📎  View Receipt",
                     self._view_receipt,
                     bg=C_BG, fg=C_TEXT,
-                    font=("Segoe UI", 9), pady=5, padx=10
+                    font=(FONT_UI[0], 9), pady=5, padx=10
                     ).pack(side="left", padx=6)
 
     # ── Tax computation card ──────────────────────────────────────────────────
 
     def _build_computation_card(self, parent):
         tk.Label(parent, text="🧮  Tax Computation",
-                 font=("Segoe UI", 13, "bold"), bg=C_BG, fg=C_TEXT
+                 font=(FONT_UI[0], 13, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(anchor="w", padx=28, pady=(14, 6))
 
         card = Card(parent, padx=20, pady=16,
@@ -249,12 +219,12 @@ class TaxPage(ScrollFrame):
         for i, (display, key, color, weight) in enumerate(row_defs):
             is_div = display.startswith("─")
             tk.Label(grid, text=display,
-                     font=("Segoe UI", 10, weight), bg=C_CARD,
+                     font=(FONT_UI[0], 10, weight), bg=C_CARD,
                      fg=C_TEXT_LT if is_div else C_TEXT
                      ).grid(row=i, column=0, sticky="w", pady=2, padx=(0, 20))
             if key:
                 lbl = tk.Label(grid, text="RM 0.00",
-                               font=("Segoe UI", 11, weight), bg=C_CARD, fg=color)
+                               font=(FONT_UI[0], 11, weight), bg=C_CARD, fg=color)
                 lbl.grid(row=i, column=1, sticky="e", pady=2)
                 self._calc_labels[key] = lbl
 
@@ -262,7 +232,7 @@ class TaxPage(ScrollFrame):
 
     def _build_bracket_table(self, parent):
         tk.Label(parent, text="📊  Tax Bracket Breakdown",
-                 font=("Segoe UI", 13, "bold"), bg=C_BG, fg=C_TEXT
+                 font=(FONT_UI[0], 13, "bold"), bg=C_BG, fg=C_TEXT
                  ).pack(anchor="w", padx=28, pady=(14, 6))
 
         card = Card(parent, padx=0, pady=0,
@@ -286,8 +256,7 @@ class TaxPage(ScrollFrame):
     # ── Add manual relief dialog ──────────────────────────────────────────────
 
     def _open_add_relief(self, prefill_id=None):
-        """Open dialog to add a new manual relief, or edit one if prefill_id given."""
-        editing = prefill_id is not None
+        editing  = prefill_id is not None
         existing = self.db.get_relief_by_id(prefill_id) if editing else None
 
         dialog = tk.Toplevel(self)
@@ -297,12 +266,14 @@ class TaxPage(ScrollFrame):
         dialog.grab_set()
         dialog.transient(self)
 
-        # Header
+        # FIX (UX): keyboard shortcuts on the relief dialog too
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+
         hdr = tk.Frame(dialog, bg=C_PRIMARY, padx=20, pady=14)
         hdr.pack(fill="x")
         hdr_text = "Edit Manual Relief" if editing else "Add Manual Relief Entry"
         tk.Label(hdr, text=hdr_text,
-                 font=("Segoe UI", 12, "bold"), bg=C_PRIMARY, fg="white").pack(side="left")
+                 font=(FONT_UI[0], 12, "bold"), bg=C_PRIMARY, fg="white").pack(side="left")
         tk.Button(hdr, text="✕", bg=C_PRIMARY, fg="white", relief="flat",
                   cursor="hand2", command=dialog.destroy).pack(side="right")
 
@@ -310,16 +281,14 @@ class TaxPage(ScrollFrame):
         body.pack(fill="both")
 
         def lbl(text):
-            tk.Label(body, text=text, font=("Segoe UI", 9, "bold"),
+            tk.Label(body, text=text, font=(FONT_UI[0], 9, "bold"),
                      bg=C_CARD, fg=C_TEXT_MED).pack(anchor="w", pady=(8, 1))
 
-        # Relief category combo
         lbl("Relief Category")
         keys  = [r[0] for r in ALL_RELIEFS]
         names = [f"{r[1]}  (max RM {r[2]:,.0f})" for r in ALL_RELIEFS]
         combo = ttk.Combobox(body, values=names, state="readonly",
-                             font=("Segoe UI", 9), width=52)
-        # Pre-select existing key when editing
+                             font=(FONT_UI[0], 9), width=52)
         if editing and existing:
             try:
                 combo.current(keys.index(existing["relief_key"]))
@@ -331,41 +300,35 @@ class TaxPage(ScrollFrame):
 
         lbl("Description")
         name_var = tk.StringVar(value=existing["name"] if existing else "")
-        tk.Entry(body, textvariable=name_var, font=("Segoe UI", 10),
+        tk.Entry(body, textvariable=name_var, font=(FONT_UI[0], 10),
                  relief="solid", bd=1, bg="white").pack(fill="x", ipady=5)
 
         lbl("Amount (RM)")
-        amt_var = tk.StringVar(
-            value=str(existing["amount"]) if existing else "")
-        tk.Entry(body, textvariable=amt_var, font=("Segoe UI", 10),
+        amt_var = tk.StringVar(value=str(existing["amount"]) if existing else "")
+        tk.Entry(body, textvariable=amt_var, font=(FONT_UI[0], 10),
                  relief="solid", bd=1, bg="white").pack(fill="x", ipady=5)
 
         lbl("Date")
-        dp = DatePickerFrame(body,
-                             initial_date=existing["date"] if existing else None)
+        dp = DatePickerFrame(body, initial_date=existing["date"] if existing else None)
         dp.pack(anchor="w", pady=(2, 0))
 
         lbl("Notes (optional) — e.g. 'Spectacles receipt from Dr Lim'")
         notes_var = tk.StringVar(value=existing["notes"] if existing else "")
-        tk.Entry(body, textvariable=notes_var, font=("Segoe UI", 10),
+        tk.Entry(body, textvariable=notes_var, font=(FONT_UI[0], 10),
                  relief="solid", bd=1, bg="white").pack(fill="x", ipady=5)
 
-        # Receipt
         lbl("Receipt / Invoice")
-        receipt_path = [""]
+        receipt_path    = [""]
         existing_receipt = existing["receipt"] if existing else ""
         rec_row = tk.Frame(body, bg=C_CARD)
         rec_row.pack(fill="x", pady=(0, 4))
         if existing_receipt and os.path.exists(existing_receipt):
-            rec_text  = f"Attached: {os.path.basename(existing_receipt)[:32]}"
-            rec_color = C_SUCCESS
+            rec_text, rec_color = f"Attached: {os.path.basename(existing_receipt)[:32]}", C_SUCCESS
         elif existing_receipt:
-            rec_text  = "⚠  Receipt file missing"
-            rec_color = C_DANGER
+            rec_text, rec_color = "⚠  Receipt file missing", C_DANGER
         else:
-            rec_text  = "No file"
-            rec_color = C_TEXT_LT
-        rec_lbl = tk.Label(rec_row, text=rec_text, font=("Segoe UI", 9),
+            rec_text, rec_color = "No file", C_TEXT_LT
+        rec_lbl = tk.Label(rec_row, text=rec_text, font=(FONT_UI[0], 9),
                            bg=C_CARD, fg=rec_color)
         rec_lbl.pack(side="left", fill="x", expand=True)
 
@@ -378,41 +341,33 @@ class TaxPage(ScrollFrame):
                 rec_lbl.config(text=os.path.basename(p)[:32], fg=C_SUCCESS)
 
         make_button(rec_row, "Browse", browse,
-                    bg=C_BG, fg=C_TEXT, font=("Segoe UI", 9),
+                    bg=C_BG, fg=C_TEXT, font=(FONT_UI[0], 9),
                     pady=3, padx=8).pack(side="right")
 
-        # Save
         def save():
-            idx = combo.current()
-            if idx < 0:
-                idx = 0
+            idx        = max(combo.current(), 0)
             actual_key = keys[idx]
-            name = name_var.get().strip() or ALL_RELIEFS[idx][1]
+            name       = name_var.get().strip() or ALL_RELIEFS[idx][1]
             try:
                 amt = float(amt_var.get().replace(",", ""))
                 if amt <= 0:
                     raise ValueError
             except ValueError:
-                messagebox.showwarning("Invalid",
-                                       "Enter a valid positive amount.",
+                messagebox.showwarning("Invalid", "Enter a valid positive amount.",
                                        parent=dialog)
                 return
             dt_str = dp.get_date()
             if dt_str is None:
-                messagebox.showwarning("Invalid Date",
-                                       "The date is not valid.",
+                messagebox.showwarning("Invalid Date", "The date is not valid.",
                                        parent=dialog)
                 return
-
             if receipt_path[0]:
                 stored = save_receipt(receipt_path[0])
             elif existing_receipt and os.path.exists(existing_receipt):
                 stored = existing_receipt
             else:
                 stored = ""
-
             notes = notes_var.get().strip()
-
             if editing:
                 self.db.update_relief(prefill_id, name, amt, dt_str, notes, stored)
             else:
@@ -422,8 +377,16 @@ class TaxPage(ScrollFrame):
 
         btn_lbl = "💾  Save Changes" if editing else "💾  Save Relief"
         make_button(body, btn_lbl, save,
-                    font=("Segoe UI", 11, "bold"), pady=10
+                    font=(FONT_UI[0], 11, "bold"), pady=10
                     ).pack(fill="x", pady=(14, 0))
+
+        # FIX (UX): Enter to save in relief dialog
+        dialog.bind("<Return>", lambda _e: save())
+
+        # Hint label
+        tk.Label(body, text="Enter to save  •  Esc to cancel",
+                 font=(FONT_UI[0], 8), bg=C_CARD, fg=C_TEXT_LT
+                 ).pack(pady=(4, 0))
 
         dialog.update_idletasks()
         root = self.winfo_toplevel()
@@ -485,8 +448,7 @@ class TaxPage(ScrollFrame):
         row_id = int(key_col[2:])
         row    = self.db.get_relief_by_id(row_id)
         if not row or not row["receipt"]:
-            messagebox.showinfo("No Receipt",
-                                "No receipt attached.", parent=self)
+            messagebox.showinfo("No Receipt", "No receipt attached.", parent=self)
             return
         if not os.path.exists(row["receipt"]):
             if messagebox.askyesno(
@@ -502,7 +464,6 @@ class TaxPage(ScrollFrame):
     # ── Refresh ───────────────────────────────────────────────────────────────
 
     def refresh(self):
-        # Re-build year list in case new data was added since last visit
         data_years = self._get_data_years()
         year_strs  = [str(y) for y in data_years]
         try:
@@ -515,7 +476,6 @@ class TaxPage(ScrollFrame):
 
         yr = self._tax_year
 
-        # Income figures — filtered to selected year
         sal   = self.db.total_income_period(category="salary",    year=yr)
         alw   = self.db.total_income_period(category="allowance", year=yr)
         gross = sal
@@ -524,7 +484,6 @@ class TaxPage(ScrollFrame):
         self._inc_labels["allowance"].config(text=fmt_rm(alw) + "  (excluded)")
         self._inc_labels["total"].config(text=fmt_rm(gross))
 
-        # Relief computation — filtered to selected year
         auto_by_relief = self.db.tax_deductible_by_relief_year(year=yr)
         manual_rows    = self.db.get_reliefs_year(year=yr)
 
@@ -542,7 +501,6 @@ class TaxPage(ScrollFrame):
             claimed    = min(auto_amt + manual_amt, max_rm)
             total_relief += claimed
 
-            # Collect notes from all manual entries for this key
             notes_str = " | ".join(
                 r["notes"] for r in manual_by_key.get(key, []) if r["notes"]
             )
@@ -554,7 +512,6 @@ class TaxPage(ScrollFrame):
                         notes_str, f"P_{key}"),
                 tags=(tag,))
 
-            # Sub-rows for each manual entry
             for row in manual_by_key.get(key, []):
                 receipt_exists = bool(row["receipt"] and os.path.exists(row["receipt"]))
                 receipt_broken = bool(row["receipt"] and not os.path.exists(row["receipt"]))
@@ -567,7 +524,6 @@ class TaxPage(ScrollFrame):
                             f"M_{row['id']}"),
                     tags=(sub_tag,))
 
-        # Tax computation
         result = compute_full_tax(gross, total_relief)
         self._calc_labels["gross"].config(text=fmt_rm(result["gross"]))
         self._calc_labels["reliefs"].config(text=f"– {fmt_rm(result['reliefs'])}")
@@ -577,7 +533,6 @@ class TaxPage(ScrollFrame):
         self._calc_labels["net_tax"].config(text=fmt_rm(result["net_tax"]))
         self._calc_labels["eff_rate"].config(text=f"{result['eff_rate']:.2f}%")
 
-        # Bracket breakdown
         for item in self._brk_tree.get_children():
             self._brk_tree.delete(item)
         for label, rate_str, taxable, tax_amt in build_bracket_rows(result["chargeable"]):
