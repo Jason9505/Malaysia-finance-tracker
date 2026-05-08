@@ -12,6 +12,7 @@
 
 import sys
 import os
+import logging
 
 # ── Path fix ──────────────────────────────────────────────────────────────────
 # Add the folder that contains main.py to sys.path so that database.py,
@@ -21,17 +22,18 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
-# Uncomment the next two lines if you still get ModuleNotFoundError,
-# to see exactly where Python is looking for files:
-# print("Script folder:", _THIS_DIR)
-# print("Files found:", os.listdir(_THIS_DIR))
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+_logger = logging.getLogger(__name__)
 
 import tkinter as tk
-from tkinter import ttk
 from datetime import date
 
-from config   import (C_BG, C_CARD, C_SIDEBAR, C_SIDEBAR_H, C_SIDEBAR_ACT,
-                      C_PRIMARY, NAV_ITEMS, apply_theme)
+from config   import NAV_ITEMS, refresh_theme, apply_ttk_styles
 from database import DB
 from pages    import DashboardPage, IncomePage, ExpensesPage, TaxPage, SettingsPage
 
@@ -53,27 +55,12 @@ class App(tk.Tk):
 
         # ── Apply saved theme BEFORE any page widgets are built ───────────────
         saved_theme = self.db.get_setting("theme", "light")
-        apply_theme(saved_theme)
-
-        # Propagate updated C_* colours to every already-imported module so
-        # pages (which do `from config import C_BG, ...`) see the right palette
-        # when they build their widgets for the first time (pages are lazy).
-        import sys as _sys, config as _cfg
-        _colour_keys = [k for k in vars(_cfg) if k.startswith("C_")]
-        for _mod in list(_sys.modules.values()):
-            if _mod is None or _mod is _cfg:
-                continue
-            for _k in _colour_keys:
-                if hasattr(_mod, _k):
-                    try:
-                        setattr(_mod, _k, getattr(_cfg, _k))
-                    except (AttributeError, TypeError):
-                        pass
+        refresh_theme(saved_theme)
 
         self._set_geometry()
         import config as _cfg
         self.configure(bg=_cfg.C_BG)
-        self._apply_styles()
+        apply_ttk_styles(self)
         self._build_layout()
 
         # Page registry: key -> page widget (built lazily)
@@ -93,41 +80,6 @@ class App(tk.Tk):
         y  = (sh - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.minsize(720, 520)
-
-    def _apply_styles(self):
-        import config as _cfg
-        s = ttk.Style(self)
-        s.theme_use("clam")
-        s.configure("Treeview",
-                    background=_cfg.C_CARD,
-                    foreground=_cfg.C_TEXT,
-                    rowheight=38,
-                    fieldbackground=_cfg.C_CARD,
-                    borderwidth=0,
-                    font=("Segoe UI", 9))
-        s.configure("Treeview.Heading",
-                    background=_cfg.C_BG,
-                    foreground=_cfg.C_TEXT,
-                    font=("Segoe UI", 9, "bold"),
-                    relief="flat")
-        s.map("Treeview",
-              background=[("selected", _cfg.C_PRIMARY_LT)],
-              foreground=[("selected", _cfg.C_PRIMARY)])
-        s.configure("TScrollbar",
-                    background=_cfg.C_BG,
-                    troughcolor=_cfg.C_BG,
-                    bordercolor=_cfg.C_BG,
-                    arrowcolor=_cfg.C_TEXT_LT)
-        s.configure("TCombobox",
-                    fieldbackground=_cfg.C_CARD,
-                    background=_cfg.C_CARD,
-                    foreground=_cfg.C_TEXT,
-                    arrowcolor=_cfg.C_TEXT_MED,
-                    selectbackground=_cfg.C_PRIMARY_LT,
-                    selectforeground=_cfg.C_TEXT)
-        s.map("TCombobox",
-              fieldbackground=[("readonly", _cfg.C_CARD)],
-              foreground=[("readonly", _cfg.C_TEXT)])
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -246,6 +198,12 @@ class App(tk.Tk):
         page = self._pages.get(key)
         if page and hasattr(page, "refresh"):
             page.refresh()
+
+    def rebuild_page(self, key: str):
+        """Destroy and rebuild a page so it picks up new theme colours."""
+        page = self._pages.pop(key, None)
+        if page:
+            page.destroy()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

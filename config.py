@@ -79,7 +79,7 @@ EXPENSE_CATS = {
     "childcare":  ("Childcare",                   True,  "childcare"),
     "transport":  ("Transport",                   False, ""),
     "utilities":  ("Utilities",                   False, ""),
-    "housing":    ("Housing / Rent",              False, "housing_interest"),
+    "housing":    ("Housing / Rent",              True,  "housing_interest"),
     "others":     ("Others",                      False, ""),
 }
 
@@ -168,10 +168,11 @@ def _detect_system_dark() -> bool:
         pass
     return False
 
-def apply_theme(theme_name: str) -> None:
+def apply_theme(theme_name: str) -> dict:
     """
     Update every module-level colour constant in config for the chosen theme.
     theme_name: 'light' | 'dark' | 'system'
+    Returns the applied palette dict.
     """
     import sys
     mod = sys.modules[__name__]
@@ -183,3 +184,64 @@ def apply_theme(theme_name: str) -> None:
         palette = _LIGHT_PALETTE
     for k, v in palette.items():
         setattr(mod, k, v)
+    return palette
+
+
+def refresh_theme(theme_name: str) -> dict:
+    """
+    Apply theme and propagate updated C_* colour constants to every
+    already-imported module so they see the new palette immediately.
+    Returns the applied palette dict.
+    """
+    import sys
+    import config as _cfg
+    palette = apply_theme(theme_name)
+    _colour_keys = [k for k in vars(_cfg) if k.startswith("C_")]
+    for _mod in list(sys.modules.values()):
+        if _mod is None or _mod is _cfg:
+            continue
+        for _k in _colour_keys:
+            if hasattr(_mod, _k):
+                try:
+                    setattr(_mod, _k, getattr(_cfg, _k))
+                except (AttributeError, TypeError):
+                    pass
+    return palette
+
+
+def apply_ttk_styles(widget) -> None:
+    """Configure ttk styles using current C_* colour constants."""
+    from tkinter import ttk
+    import config as _cfg
+    s = ttk.Style(widget)
+    s.theme_use("clam")
+    s.configure("Treeview",
+                background=_cfg.C_CARD,
+                foreground=_cfg.C_TEXT,
+                rowheight=38,
+                fieldbackground=_cfg.C_CARD,
+                borderwidth=0,
+                font=("Segoe UI", 9))
+    s.configure("Treeview.Heading",
+                background=_cfg.C_BG,
+                foreground=_cfg.C_TEXT,
+                font=("Segoe UI", 9, "bold"),
+                relief="flat")
+    s.map("Treeview",
+          background=[("selected", _cfg.C_PRIMARY_LT)],
+          foreground=[("selected", _cfg.C_PRIMARY)])
+    s.configure("TScrollbar",
+                background=_cfg.C_BG,
+                troughcolor=_cfg.C_BG,
+                bordercolor=_cfg.C_BG,
+                arrowcolor=_cfg.C_TEXT_LT)
+    s.configure("TCombobox",
+                fieldbackground=_cfg.C_CARD,
+                background=_cfg.C_CARD,
+                foreground=_cfg.C_TEXT,
+                arrowcolor=_cfg.C_TEXT_MED,
+                selectbackground=_cfg.C_PRIMARY_LT,
+                selectforeground=_cfg.C_TEXT)
+    s.map("TCombobox",
+          fieldbackground=[("readonly", _cfg.C_CARD)],
+          foreground=[("readonly", _cfg.C_TEXT)])

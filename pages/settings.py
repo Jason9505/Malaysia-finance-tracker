@@ -10,6 +10,7 @@ import sys
 import os
 import io
 import shutil
+import logging
 import sqlite3
 import zipfile
 from datetime import date, datetime
@@ -21,9 +22,13 @@ import config
 from config  import (C_BG, C_CARD, C_TEXT, C_TEXT_MED, C_TEXT_LT,
                      C_SUCCESS, C_DANGER, C_WARNING, C_BORDER,
                      C_PRIMARY, C_PRIMARY_LT, C_ACCENT,
-                     DB_PATH, APP_DIR, RECEIPTS_DIR, FONT_UI)
+                     DB_PATH, APP_DIR, RECEIPTS_DIR, FONT_UI,
+                     refresh_theme, apply_ttk_styles)
+from utils   import open_file
 from widgets import Card, ScrollFrame, make_button
 from export  import export_to_excel, export_to_zip
+
+logger = logging.getLogger(__name__)
 
 try:
     import openpyxl
@@ -61,14 +66,14 @@ def _row_label(parent, title, subtitle="", bg=C_CARD):
 # Import helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _import_rows(db, wb, receipt_map):
+def _import_rows(db, wb, receipt_map, skip_duplicates=True):
     """
-    FIX (UX): Now collects skipped rows with reasons instead of swallowing them.
+    Import all data rows from an openpyxl Workbook.
     Returns (inc_count, exp_count, rel_count, skipped_list).
     skipped_list is a list of (sheet, row_num, reason) tuples.
     """
-    inc_count = exp_count = rel_count = 0
-    skipped = []   # FIX: was silently discarded
+    inc_count = exp_count = rel_count = dup_count = 0
+    skipped = []
 
     # ── Income sheet ──────────────────────────────────────────────────────────
     if "Income" in wb.sheetnames:
@@ -78,11 +83,11 @@ def _import_rows(db, wb, receipt_map):
             for rn, row in enumerate(rows[1:], start=2):
                 try:
                     padded = (list(row) + [""] * 7)[:7]
-                    _, cat, name, amount, dt, notes, rec_base = padded
+                    marker, cat, name, amount, dt, notes, rec_base = padded
+                    if marker and str(marker).strip() == "__SUMMARY__":
+                        continue
                     if not name or not amount or not dt:
                         skipped.append(("Income", rn, "Missing name, amount, or date"))
-                        continue
-                    if str(name).strip().upper() == "TOTAL":
                         continue
                     amount = float(str(amount).replace(",", "").strip())
                     if amount <= 0:
@@ -92,6 +97,13 @@ def _import_rows(db, wb, receipt_map):
                     dt     = str(dt).strip()[:10]
                     notes  = str(notes).strip() if notes else ""
                     rec_path = receipt_map.get(str(rec_base).strip(), "") if rec_base else ""
+                    if skip_duplicates:
+                        existing = db.conn.execute(
+                            "SELECT COUNT(*) FROM income WHERE name=? AND amount=? AND date=? AND category=?",
+                            (str(name).strip(), amount, dt, cat)).fetchone()[0]
+                        if existing:
+                            dup_count += 1
+                            continue
                     db.add_income(cat, str(name).strip(), amount, dt, notes, rec_path)
                     inc_count += 1
                 except Exception as e:
@@ -107,11 +119,11 @@ def _import_rows(db, wb, receipt_map):
             for rn, row in enumerate(rows[1:], start=2):
                 try:
                     padded = (list(row) + [""] * 8)[:8]
-                    _, cat_label, name, amount, dt, tax_relief, notes, rec_base = padded
+                    marker, cat_label, name, amount, dt, tax_relief, notes, rec_base = padded
+                    if marker and str(marker).strip() == "__SUMMARY__":
+                        continue
                     if not name or not amount or not dt:
                         skipped.append(("Expenses", rn, "Missing name, amount, or date"))
-                        continue
-                    if str(name).strip().upper() == "TOTAL":
                         continue
                     amount  = float(str(amount).replace(",", "").strip())
                     if amount <= 0:
@@ -162,14 +174,14 @@ def _import_rows(db, wb, receipt_map):
                 except Exception as e:
                     skipped.append(("Tax Reliefs", rn, str(e)))
 
-    return inc_count, exp_count, rel_count, skipped
+    return inc_count, exp_count, rel_count, dup_count, skipped
 
 
-def _import_from_excel(db, filepath):
+def _import_from_excel(db, filepath, skip_duplicates=True):
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-    result = _import_rows(db, wb, receipt_map={})
+    result = _import_rows(db, wb, receipt_map={}, skip_duplicates=skip_duplicates)
     wb.close()
-    return result
+    return result  # (inc, exp, rel, dup, skipped)
 
 
 def _import_from_zip(db, filepath):
@@ -184,9 +196,11 @@ def _import_from_zip(db, filepath):
             if name.startswith("receipts/") and not name.endswith("/"):
                 base = os.path.basename(name)
                 dest = os.path.join(RECEIPTS_DIR, base)
-                if not os.path.exists(dest):
-                    with zf.open(name) as src, open(dest, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
+                if os.path.exists(dest):
+                    base = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{base}"
+                    dest = os.path.join(RECEIPTS_DIR, base)
+                with zf.open(name) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
                 receipt_map[base] = dest
                 rec_count += 1
 
@@ -198,9 +212,9 @@ def _import_from_zip(db, filepath):
             xlsx_data = xf.read()
 
     wb = openpyxl.load_workbook(io.BytesIO(xlsx_data), read_only=True, data_only=True)
-    inc, exp, rel, skipped = _import_rows(db, wb, receipt_map)
+    inc, exp, rel, dup, skipped = _import_rows(db, wb, receipt_map)
     wb.close()
-    return inc, exp, rel, rec_count, skipped
+    return inc, exp, rel, dup, rec_count, skipped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,17 +321,18 @@ class SettingsPage(ScrollFrame):
 
         self._highlight_preview()
 
-        self._restart_lbl = tk.Label(
-            card,
-            text="  ℹ️  Theme saved. Please restart the app to apply the new theme.",
-            font=(FONT_UI[0], 9, "italic"),
-            bg="#fefce8", fg="#92400e", pady=8)
-
     def _on_theme_change(self):
         theme = self._theme_var.get()
         self.db.set_setting("theme", theme)
+        refresh_theme(theme)
+        apply_ttk_styles(self)
         self._highlight_preview()
-        self._restart_lbl.pack(fill="x", padx=20, pady=(0, 8))
+        root = self.winfo_toplevel()
+        if hasattr(root, "rebuild_page"):
+            for key in ("dashboard", "income", "expenses", "tax"):
+                root.rebuild_page(key)
+            root.rebuild_page("settings")
+            root.show_page("settings")
 
     def _highlight_preview(self):
         active = self._theme_var.get()
@@ -431,9 +446,9 @@ class SettingsPage(ScrollFrame):
 
         try:
             if is_zip:
-                inc, exp, rel, rec, skipped = _import_from_zip(self.db, filepath)
+                inc, exp, rel, dup, rec, skipped = _import_from_zip(self.db, filepath)
             else:
-                inc, exp, rel, skipped = _import_from_excel(self.db, filepath)
+                inc, exp, rel, dup, skipped = _import_from_excel(self.db, filepath)
                 rec = 0
         except Exception as err:
             messagebox.showerror("Import Failed",
@@ -448,17 +463,20 @@ class SettingsPage(ScrollFrame):
                 parent=self)
             return
 
-        # FIX (UX): Show detailed summary including skipped row report
+        self.db._invalidate_cache()
+
         msg = (f"Successfully imported:\n\n"
                f"  💵  Income entries:      {inc}\n"
                f"  🧾  Expense entries:     {exp}\n"
                f"  📋  Relief entries:      {rel}\n")
+        if dup:
+            msg += f"  ⏭️  Duplicates skipped:   {dup}\n"
         if is_zip:
             msg += f"  📎  Receipt files:      {rec}\n"
 
         if skipped:
             msg += f"\n⚠  {len(skipped)} row(s) skipped due to errors:\n"
-            for sheet, row_num, reason in skipped[:10]:  # cap at 10 lines
+            for sheet, row_num, reason in skipped[:10]:
                 msg += f"  • {sheet} row {row_num}: {reason}\n"
             if len(skipped) > 10:
                 msg += f"  … and {len(skipped) - 10} more. Check your source file."
@@ -628,32 +646,47 @@ class SettingsPage(ScrollFrame):
         if not _TypeConfirmDialog(self, confirm_word="RESET").confirmed:
             return
 
+        theme = self.db.get_setting("theme", "light")
+        backup_path = DB_PATH + ".reset_backup"
         try:
-            cur_settings = {"theme": self.db.get_setting("theme", "light")}
-            self.db.conn.executescript("""
-                DELETE FROM income;
-                DELETE FROM expenses;
-                DELETE FROM relief_entries;
-            """)
-            self.db.conn.commit()
-            for k, v in cur_settings.items():
-                self.db.set_setting(k, v)
-        except Exception as err:
-            messagebox.showerror("Reset Failed",
-                                 f"Database error:\n{err}", parent=self)
+            shutil.copy2(DB_PATH, backup_path)
+        except OSError as err:
+            messagebox.showerror("Backup Failed",
+                                 f"Could not create backup before reset:\n{err}",
+                                 parent=self)
             return
+
+        try:
+            self.db.clear_all_data()
+            self.db.set_setting("theme", theme)
+        except Exception as err:
+            try:
+                shutil.copy2(backup_path, DB_PATH)
+            except OSError:
+                pass
+            messagebox.showerror("Reset Failed",
+                                 f"Database error:\n{err}\n\n"
+                                 "Your data has been restored from backup.",
+                                 parent=self)
+            return
+        finally:
+            try:
+                os.remove(backup_path)
+            except OSError:
+                pass
 
         deleted_files = 0
         if os.path.isdir(RECEIPTS_DIR):
             for fname in os.listdir(RECEIPTS_DIR):
                 fpath = os.path.join(RECEIPTS_DIR, fname)
                 try:
-                    if os.path.isfile(fpath):
+                    if os.path.isfile(fpath) or os.path.islink(fpath):
                         os.remove(fpath)
                         deleted_files += 1
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.warning("Failed to delete receipt '%s': %s", fpath, e)
 
+        self._invalidate_cache()
         self._notify_all()
         messagebox.showinfo(
             "Reset Complete",
@@ -703,18 +736,7 @@ class SettingsPage(ScrollFrame):
                     ).pack(anchor="w")
 
     def _open_data_folder(self):
-        import platform, subprocess
-        try:
-            system = platform.system()
-            if system == "Windows":
-                os.startfile(APP_DIR)
-            elif system == "Darwin":
-                subprocess.Popen(["open", APP_DIR])
-            else:
-                subprocess.Popen(["xdg-open", APP_DIR])
-        except Exception as err:
-            messagebox.showerror("Error",
-                                 f"Cannot open folder:\n{err}", parent=self)
+        open_file(APP_DIR)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

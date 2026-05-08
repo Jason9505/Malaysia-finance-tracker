@@ -278,8 +278,7 @@ class DashboardPage(ScrollFrame):
             return
         for w in self._pie_chart_area.winfo_children():
             w.destroy()
-        self._mpl_canvases = [c for c in self._mpl_canvases
-                               if c.get_tk_widget().winfo_exists()]
+        self._mpl_canvases.clear()
         self._draw_donut_chart()
 
     # ── Draw charts ───────────────────────────────────────────────────────────

@@ -70,6 +70,7 @@ def _income_sheet(wb, db, with_receipts=False):
 
     if rows:
         tr = len(rows) + 2
+        ws.cell(row=tr, column=1, value="__SUMMARY__")
         ws.cell(row=tr, column=3, value="TOTAL").font = _font(bold=True)
         tc = ws.cell(row=tr, column=4, value=db.total_income())
         tc.font = _font(bold=True, colour="10b981")
@@ -99,6 +100,7 @@ def _expenses_sheet(wb, db, with_receipts=False):
 
     if rows:
         tr = len(rows) + 2
+        ws.cell(row=tr, column=1, value="__SUMMARY__")
         ws.cell(row=tr, column=3, value="TOTAL").font = _font(bold=True)
         tc = ws.cell(row=tr, column=4, value=db.total_expenses())
         tc.font = _font(bold=True, colour="ef4444")

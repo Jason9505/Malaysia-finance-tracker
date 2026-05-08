@@ -14,11 +14,7 @@ from config import (C_BG, C_CARD, C_PRIMARY, C_PRIMARY_LT,
                     C_SUCCESS, C_DANGER, C_TEXT, C_TEXT_MED, C_TEXT_LT,
                     C_BORDER, FONT_UI)
 from utils import save_receipt, open_file, PIL_AVAILABLE
-
-try:
-    from PIL import Image, ImageTk
-except ImportError:
-    pass
+from utils import Image, ImageTk
 
 _MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
            "Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -36,7 +32,15 @@ class Card(tk.Frame):
 
 
 class ScrollFrame(tk.Frame):
-    """Vertically-scrollable container. Place children inside self.inner."""
+    """Vertically-scrollable container. Place children inside self.inner.
+
+    Uses a shared root-level mouse wheel handler that dispatches to the
+    ScrollFrame whose canvas area the cursor is currently over, avoiding
+    the global bind/unbind conflicts of the previous approach.
+    """
+    _active_canvas = None
+    _bound = False
+
     def __init__(self, parent, **kw):
         kw.setdefault("bg", C_BG)
         super().__init__(parent, **kw)
@@ -49,10 +53,31 @@ class ScrollFrame(tk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.vscroll.pack(side="right", fill="y")
         self.canvas.bind("<Configure>", self._on_canvas_resize)
-        self.bind("<Enter>", self._enable_scroll)
-        self.canvas.bind("<Enter>", self._enable_scroll)
-        self.inner.bind("<Enter>",  self._enable_scroll)
-        self.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<Enter>", self._set_active)
+        self.canvas.bind("<Leave>", self._clear_active, add="+")
+
+        if not ScrollFrame._bound:
+            self.bind_all("<MouseWheel>", ScrollFrame._root_scroll)
+            self.bind_all("<Button-4>",   ScrollFrame._root_scroll)
+            self.bind_all("<Button-5>",   ScrollFrame._root_scroll)
+            ScrollFrame._bound = True
+
+    def _set_active(self, _e=None):
+        ScrollFrame._active_canvas = self.canvas
+
+    def _clear_active(self, event):
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        if widget is not None:
+            w = widget
+            while w is not None:
+                if w is self:
+                    return
+                try:
+                    w = w.master
+                except AttributeError:
+                    break
+        if ScrollFrame._active_canvas is self.canvas:
+            ScrollFrame._active_canvas = None
 
     def _on_inner_configure(self, _e):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -60,37 +85,14 @@ class ScrollFrame(tk.Frame):
     def _on_canvas_resize(self, event):
         self.canvas.itemconfig("inner", width=event.width)
 
-    def _enable_scroll(self, _e=None):
-        self.canvas.bind_all("<MouseWheel>", self._scroll)
-        self.canvas.bind_all("<Button-4>",   self._scroll)
-        self.canvas.bind_all("<Button-5>",   self._scroll)
-
-    def _on_leave(self, event):
-        try:
-            widget = self.winfo_containing(event.x_root, event.y_root)
-            if widget is not None:
-                w = widget
-                while w is not None:
-                    if w is self:
-                        return
-                    try:
-                        w = w.master
-                    except AttributeError:
-                        break
-        except Exception:
-            pass
-        self._disable_scroll()
-
-    def _disable_scroll(self, _e=None):
-        self.canvas.unbind_all("<MouseWheel>")
-        self.canvas.unbind_all("<Button-4>")
-        self.canvas.unbind_all("<Button-5>")
-
-    def _scroll(self, event):
-        if event.num == 4 or event.delta > 0:
-            self.canvas.yview_scroll(-1, "units")
-        else:
-            self.canvas.yview_scroll(1, "units")
+    @staticmethod
+    def _root_scroll(event):
+        c = ScrollFrame._active_canvas
+        if c is not None:
+            if event.num == 4 or event.delta > 0:
+                c.yview_scroll(-1, "units")
+            else:
+                c.yview_scroll(1, "units")
 
 
 # ── Button helper ─────────────────────────────────────────────────────────────
@@ -330,6 +332,11 @@ class AddEntryDialog(tk.Toplevel):
 
         if not name:
             messagebox.showwarning("Required", "Please enter a name.", parent=self)
+            return
+        if len(name) > 255:
+            messagebox.showwarning("Too Long",
+                                   "Name must be 255 characters or fewer.",
+                                   parent=self)
             return
 
         try:

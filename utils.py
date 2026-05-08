@@ -15,6 +15,8 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+    Image = None
+    ImageTk = None
 
 
 # ── Number formatting ─────────────────────────────────────────────────────────
